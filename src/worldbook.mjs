@@ -47,7 +47,7 @@ export function parseWorldbook(parsed,fail){
     if(setting('excludeRecursion','exclude_recursion')||setting('preventRecursion','prevent_recursion')||setting('delayUntilRecursion','delay_until_recursion'))warn('ST_RECURSION',`条目 ${id}：递归扫描选项只保留来源，不模拟酒馆递归触发。`,id)
     if((value.position??extensions.position)!=null||(value.order??value.insertion_order)!=null||(value.depth??extensions.depth)!=null||setting('role')!=null||setting('outletName','outlet_name'))warn('ST_INSERTION',`条目 ${id}：注入位置、深度、角色及优先级保留在来源；本轮顺序由 GM 选材决定。`,id)
     if(setting('caseSensitive','case_sensitive')!=null||setting('matchWholeWords','match_whole_words')!=null||setting('scanDepth','scan_depth')!=null)warn('ST_MATCH_OPTIONS',`条目 ${id}：大小写、整词匹配与扫描深度不自动迁为运行规则。`,id)
-    if(setting('group')||setting('groupOverride','group_override')||setting('useGroupScoring','use_group_scoring')||setting('vectorized')||setting('automationId','automation_id')||(setting('triggers')??[]).length||value.characterFilterNames?.length||value.characterFilterTags?.length)warn('ST_EXTENDED_ACTIVATION',`条目 ${id}：分组、向量标记、自动化或角色过滤只保留来源；不会因此启动外部服务或脚本。`,id)
+    if(setting('group')||setting('groupOverride','group_override')||setting('useGroupScoring','use_group_scoring')||setting('vectorized')||setting('automationId','automation_id')||(setting('triggers')??[]).length||value.characterFilter?.names?.length||value.characterFilter?.tags?.length||value.characterFilter?.isExclude||value.characterFilterNames?.length||value.characterFilterTags?.length)warn('ST_EXTENDED_ACTIVATION',`条目 ${id}：分组、向量标记、自动化或角色过滤只保留来源；不会因此启动外部服务或脚本。`,id)
     if(value.forbid_overrides||extensions.forbid_overrides||value.readOnly)warn('ST_AUTHOR_LOCK',`条目 ${id}：来源的禁止覆盖标记未自动变成人类 Agent 锁，请在导入后自行设置。`,id)
     if(record(value.extensions)&&Object.keys(value.extensions).length)warn('ST_EXTENSIONS_INERT',`条目 ${id}：扩展字段完整留存于原件，不执行其中的脚本或未知规则。`,id)
     const insertionOrder=value.order??value.insertion_order
@@ -58,5 +58,7 @@ export function parseWorldbook(parsed,fail){
     return{index,display:Number.isFinite(display)?display:index,entry:{id,title,content,keywords:[...new Set([...primary,...negative?[]:secondary])],tags:[],notes:'',readOnly:false,mode:disabled?'disabled':constant?'required':'auto',version:1}}
   })
   if(['scan_depth','token_budget','recursive_scanning','extensions','originalData'].some(key=>Object.hasOwn(book,key)))warn('ST_BOOK_SETTINGS','世界书全局扫描、预算及扩展配置仅保留来源；当前系统使用数据库检索与 GM 选材。')
-  return{name:book.name,format,entries:mapped.sort((a,b)=>a.display-b.display||a.index-b.index).map(item=>item.entry),diagnostics,entryRefs}
+  const named=value=>typeof value==='string'&&value.trim()?value:undefined
+  const characterName=path?named(parsed.data?.name)??named(parsed.name):undefined
+  return{name:named(book.name)??(characterName?`${characterName}的世界书`:undefined),format,entries:mapped.sort((a,b)=>a.display-b.display||a.index-b.index).map(item=>item.entry),diagnostics,entryRefs}
 }

@@ -61,7 +61,7 @@ export function importDatabase(rawText, { name } = {}) {
   const imported=parseWorldbook(parsed,fail);
   if(!imported&&!Array.isArray(parsed.entries))fail('INVALID_DATA','Source must contain database or SillyTavern worldbook entries');
   const entries=imported?.entries??parsed.entries,format=imported?.format??'rp-database',diagnostics=imported?.diagnostics??[];
-  const database = validateDatabase({ id: randomUUID(), name: name ?? imported?.name ?? parsed.name ?? 'Imported database', version: 1, entries });
+  const database = validateDatabase({ id: randomUUID(), name: name ?? imported?.name ?? (typeof parsed.name==='string'&&parsed.name.trim()?parsed.name:'Imported database'), version: 1, entries });
   const importReport={format,entryCount:entries.length,entryRefs:imported?.entryRefs??entries.map((entry,index)=>({id:entry.id,path:`entries.${index}`,index})),diagnostics:structuredClone(diagnostics)};
   const source = { id: randomUUID(), rawText, sha256: createHash('sha256').update(rawText, 'utf8').digest('hex'), format, provenance: structuredClone(parsed),importReport };
   return { database, source, diagnostics };

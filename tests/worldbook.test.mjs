@@ -59,6 +59,22 @@ test('ST array exports do not steal native database arrays or silently accept mi
   assert.throws(()=>importDatabase(JSON.stringify({spec:'chara_card_v2',data:{name:'没有内嵌世界书'}})),{code:'WORLD_BOOK_NOT_FOUND'})
 })
 
+test('blank optional embedded book names use the character name or a nonempty fallback',()=>{
+  const entries=[{id:0,keys:['灯塔'],content:'事实',enabled:true}]
+  const card={spec:'chara_card_v2',data:{name:'守灯人',character_book:{name:'',entries}}}
+  assert.equal(importDatabase(JSON.stringify(card)).database.name,'守灯人的世界书')
+  assert.equal(importDatabase(JSON.stringify({name:'  ',entries})).database.name,'Imported database')
+  assert.equal(importDatabase(JSON.stringify(card),{name:'人类自定名称'}).database.name,'人类自定名称')
+})
+
+test('native persisted character filters are diagnosed without creating a knowledge ACL',()=>{
+  const input={entries:{0:{uid:0,content:'事实',characterFilter:{names:['守卫'],tags:['城内'],isExclude:true}}}}
+  const result=importDatabase(JSON.stringify(input))
+  assert.ok(result.diagnostics.some(item=>item.code==='ST_EXTENDED_ACTIVATION'))
+  assert.equal(result.database.entries[0].mode,'auto')
+  assert.deepEqual(result.source.provenance.entries[0].characterFilter,input.entries[0].characterFilter)
+})
+
 test('import report survives restart and source edits without mutating the original or pinned story',async t=>{
   const directory=await mkdtemp(join(tmpdir(),'st-worldbook-import-'));t.after(()=>rm(directory,{recursive:true,force:true}))
   const raw=JSON.stringify({entries:{0:{uid:0,comment:'线索',key:['信'],content:'原文',constant:true,probability:50}}})
