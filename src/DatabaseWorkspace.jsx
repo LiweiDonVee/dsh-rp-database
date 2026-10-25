@@ -1,11 +1,14 @@
 import React, {useCallback, useEffect, useRef, useState} from 'react'
 import {createRpDatabaseApi} from './api.js'
+import {SourceComposition} from './SourceComposition.jsx'
 
 const defaultApi = createRpDatabaseApi()
 const clone = value => JSON.parse(JSON.stringify(value))
 const modes = {auto:'自动', required:'必开', disabled:'禁用'}
 const positive = value => Number.isSafeInteger(value) && value > 0
 const revision = value => Number.isSafeInteger(value) && value >= 0
+const itemKey = item => item.ref?JSON.stringify([item.ref.sourceKey,item.ref.entryId]):item.id
+const sourceList = binding => binding?.binding?.sources ?? (binding?.databaseId?[{key:'legacy',databaseId:binding.databaseId,version:binding.version}]:[])
 const degradation = code => ({EMBEDDING_UNCONFIGURED:'向量检索未配置', EMBEDDING_FAILED:'向量检索失败', RERANKING_UNCONFIGURED:'重排未配置', RERANKING_FAILED:'重排失败'}[String(code).toUpperCase()] ?? String(code))
 
 export function DatabaseIcon({size = 18}) {
@@ -29,7 +32,7 @@ function StoryView({binding}) {
     <button type="button" className="rpdb-disclosure" aria-label="当前故事内容与变更" aria-expanded={expanded} onClick={()=>setExpanded(!expanded)}>当前故事内容与变更 <span>{expanded?'收起':'展开'}</span></button>
     {expanded && <div className="rpdb-story-body">
       <p className="rpdb-help">以下是当前故事的有效内容，包含继承和 Agent 覆盖。</p>
-      {binding.entries?.map(item=><article key={item.id} className="rpdb-effective"><div className="rpdb-section-title"><strong>{item.title || '未命名条目'}</strong><span className="rpdb-badge">{modes[item.mode]}{item.readOnly?' · Agent 只读':''}</span></div><pre>{item.content}</pre>{item.notes&&<p>{item.notes}</p>}</article>)}
+      {binding.entries?.map(item=><article key={itemKey(item)} className="rpdb-effective"><div className="rpdb-section-title"><strong>{item.title || '未命名条目'}</strong><span className="rpdb-badge">{modes[item.mode]}{item.readOnly?' · Agent 只读':''}</span></div>{item.ref&&<small className="rpdb-id">{item.ref.sourceKey} / {item.ref.entryId}</small>}<pre>{item.content}</pre>{item.notes&&<p>{item.notes}</p>}</article>)}
       {!binding.entries?.length&&<p className="rpdb-help">当前故事没有有效条目。</p>}
       <h4>临时叙事备注</h4>{binding.notes?.length?binding.notes.map((note,index)=><p key={`${note.id}-${index}`}>{note.text}</p>):<p className="rpdb-help">暂无临时备注</p>}
       <details className="rpdb-details"><summary>覆盖变更 · {binding.changes?.length ?? 0} 项</summary><pre>{JSON.stringify(binding.changes ?? [],null,2)}</pre></details>
@@ -49,6 +52,7 @@ function SessionWorkspace({sessionId, visible, client}) {
   const [notice,setNotice] = useState('')
   const [transportError,setTransportError] = useState('')
   const [pending,setPending] = useState(null)
+  const [replaceBinding,setReplaceBinding] = useState(false)
   const [newName,setNewName] = useState('')
   const [importName,setImportName] = useState('')
   const [importText,setImportText] = useState('')
@@ -84,6 +88,7 @@ function SessionWorkspace({sessionId, visible, client}) {
           const next=await request(scope,signal=>client.state(sessionId,signal))
           if (!scope.active) break
           if (!revision(next.revision) || !Array.isArray(next.databases)) throw new Error('数据库列表响应不完整。')
+          if(next.binding&&client.effectiveV2){const effective=await request(scope,signal=>client.effectiveV2(sessionId,signal));if(!scope.active)break;if(!effective.binding||!Array.isArray(effective.entries))throw new Error('故事来源响应不完整。');next.binding=effective;next.revision=Math.max(next.revision,effective.revision)}
           if (next.revision >= scope.minimum && next.revision >= (stateRef.current?.revision ?? 0)) {
             stateRef.current=next;setState(next);setTransportError('')
           }
@@ -217,9 +222,11 @@ function SessionWorkspace({sessionId, visible, client}) {
     }catch(failure){if(valid(scope,sequence) && token===sourceSequence.current && failure.name!=='AbortError')setError(failure.message)}
     finally{if(valid(scope,sequence) && token===sourceSequence.current)setSourceBusy(false)}
   }
-  function bind() {
+  function bind(confirmed=false) {
     const captured=draftRef.current
     if(!sessionId || !captured || captured.dirty)return
+    if(stateRef.current.binding&&!confirmed){setReplaceBinding(true);return}
+    setReplaceBinding(false)
     void perform('bind',async(scope,sequence)=>{
       const result=await request(scope,signal=>client.bind(sessionId,{databaseId:captured.database.id,version:captured.database.version,expectedRevision:stateRef.current.revision},signal))
       if(!valid(scope,sequence))return
@@ -231,12 +238,25 @@ function SessionWorkspace({sessionId, visible, client}) {
       setNotice(`已应用 v${result.version} 到当前故事。`);await refresh(scope)
     })
   }
+  async function saveSources(input){
+    const scope=lifecycle.current
+    if(!scope?.active||busy)throw new Error('请等待当前操作完成。')
+    setBusy('sources')
+    try{
+      const result=await request(scope,signal=>client.bindSources(sessionId,input,signal))
+      if(!scope.active)throw new DOMException('Cancelled','AbortError')
+      if(!revision(result.revision)||!result.binding)throw new Error('来源保存响应不完整，请刷新核对。')
+      scope.minimum=Math.max(scope.minimum,result.revision)
+      if(draftRef.current&&!draftRef.current.dirty){const next={...draftRef.current,baseRevision:result.revision};draftRef.current=next;setDraft(next)}
+      await refresh(scope);return result
+    }finally{if(scope.active)setBusy('')}
+  }
   async function search() {
     const scope=lifecycle.current,token=++searchSequence.current
     if(!sessionId || !query.trim() || !valid(scope))return
     setSearchBusy(true);setResults(null);setError('')
     try{
-      const result=await request(scope,signal=>client.search(sessionId,query,signal))
+      const result=await request(scope,signal=>stateRef.current?.binding?.binding&&client.searchV2?client.searchV2(sessionId,query,signal):client.search(sessionId,query,signal))
       if(valid(scope) && token===searchSequence.current){
         if(!Array.isArray(result.candidates) || !Array.isArray(result.required) || !Array.isArray(result.degraded))throw new Error('搜索响应不完整。')
         setResults(result)
@@ -255,8 +275,11 @@ function SessionWorkspace({sessionId, visible, client}) {
   const binding=state?.binding
   const blocked=!!busy
   const retrieval=state?.retrieval
+  const sources=sourceList(binding)
+  const searchEntry=value=>{const ref=value?.ref??(value?.sourceKey?value:null);return binding?.entries.find(item=>ref?item.ref?.sourceKey===ref.sourceKey&&item.ref?.entryId===ref.entryId:item.id===(value?.id??value))}
+  const searchLabel=value=>{const ref=value?.ref??(value?.sourceKey?value:null),entry=searchEntry(value);return `${entry?.title || ref?.entryId || value?.id || value}${ref?` · ${ref.sourceKey} / ${ref.entryId}`:''}`}
   return <>
-    <header className="rpdb-header"><div className="rpdb-heading"><DatabaseIcon size={23}/><div><h2>故事数据库</h2><p>管理可复用条目，为当前故事固定一个版本。</p></div></div><button className="rpdb-icon-button" type="button" disabled={!state || busy==='refresh'} onClick={()=>void refresh(lifecycle.current)} title="刷新数据库列表" aria-label="刷新数据库列表">↻</button></header>
+    <header className="rpdb-header"><div className="rpdb-heading"><DatabaseIcon size={23}/><div><h2>故事数据库</h2><p>管理可复用条目，为当前故事固定来源与版本。</p></div></div><button className="rpdb-icon-button" type="button" disabled={!state || busy==='refresh'} onClick={()=>void refresh(lifecycle.current)} title="刷新数据库列表" aria-label="刷新数据库列表">↻</button></header>
     {transportError&&<p className="rpdb-message rpdb-warning" role="status">{transportError}</p>}
     {error&&<div className="rpdb-message rpdb-error" role="alert"><p>{error}</p>{conflict&&<p>草稿与输入已保留。{conflict==='save'?'重新载入数据库会放弃本地编辑，请先复制需要保留的内容。':'请先刷新并核对最新内容，再重试。'}</p>}{['import','create'].includes(conflict)&&<button type="button" onClick={()=>void updateFormRevision()}>更新表单修订并保留输入</button>}</div>}
     {notice&&<p className="rpdb-message" role="status">{notice}</p>}
@@ -267,19 +290,21 @@ function SessionWorkspace({sessionId, visible, client}) {
       {draft?.dirty&&<p className="rpdb-help">先保存当前修改，再新建或导入数据库。</p>}<details className="rpdb-details"><summary>新建数据库</summary><div className="rpdb-form"><label className="rpdb-field"><span>新数据库名称</span><input value={newName} disabled={blocked} onChange={event=>{captureForm('create');setNewName(event.target.value)}}/></label><button type="button" disabled={blocked || draft?.dirty || !newName.trim()} onClick={create}>新建空白数据库</button></div></details>
       <details className="rpdb-details" open={!state.databases.length}><summary>导入 JSON</summary><div className="rpdb-form"><p className="rpdb-help">支持数据库 JSON 与 SillyTavern 世界书，原件按原文保留。</p><label className="rpdb-field"><span>导入名称（可选）</span><input value={importName} disabled={blocked} onChange={event=>{captureForm('import');setImportName(event.target.value)}}/></label><label className="rpdb-field"><span>选择 JSON 文件</span><input type="file" accept=".json,application/json" disabled={blocked} onChange={event=>{void readFile(event.target.files?.[0]);event.target.value=''}}/></label><label className="rpdb-field"><span>SillyTavern 世界书 JSON</span><textarea rows={6} spellCheck={false} value={importText} disabled={blocked} onChange={event=>{++fileSequence.current;captureForm('import');setImportText(event.target.value)}}/></label><button type="button" disabled={blocked || draft?.dirty || !importText.trim()} onClick={importDatabase}>{busy==='import'?'正在导入…':'导入 JSON'}</button></div></details>
     </aside><main className="rpdb-main">
-      <section className="rpdb-binding" aria-label="当前故事绑定"><span className="rpdb-eyebrow">当前故事</span>{binding?<><strong>{state.databases.find(item=>item.id===binding.databaseId)?.name ?? binding.databaseId} · 固定 v{binding.version}</strong><p className="rpdb-help">故事继承该版本，Agent 覆盖仅影响当前故事。</p></>:<><strong>{sessionId?'尚未绑定数据库':'请先选择一个故事'}</strong><p className="rpdb-help">保存源版本后，可在这里将它应用到当前故事。</p></>}</section>
+      <section className="rpdb-binding" aria-label="当前故事绑定"><span className="rpdb-eyebrow">当前故事</span>{binding?<><strong>已固定 {sources.length} 个来源</strong><p className="rpdb-help">{sources.map(source=>`${source.key} · ${state.databases.find(item=>item.id===source.databaseId)?.name ?? source.databaseId} v${source.version}`).join('；') || '当前故事仅使用故事内条目。'} Agent 覆盖仅影响当前故事。</p></>:<><strong>{sessionId?'尚未绑定数据库':'请先选择一个故事'}</strong><p className="rpdb-help">保存源版本后，可在这里将它应用到当前故事。</p></>}</section>
+      {client.bindSources&&<SourceComposition sources={sources} revision={state.revision} databases={state.databases} sessionId={sessionId} visible={visible} blocked={blocked} selected={draft?.dirty?null:db} onSave={saveSources} onReload={()=>refresh(lifecycle.current)}/>}
       {binding&&<StoryView binding={binding}/>}
+      {replaceBinding&&<div className="rpdb-message rpdb-warning" role="status"><p>替换为当前单一来源会重置当前故事覆盖与临时备注，并移除其他来源。已有 GM 事实与回执的故事必须另开故事。</p><div className="rpdb-actions">{!binding?.binding?.factEntryRefs?.length&&<button type="button" disabled={blocked} onClick={()=>bind(true)}>确认替换并重置故事覆盖</button>}<button type="button" onClick={()=>setReplaceBinding(false)}>保留现有来源</button></div></div>}
       {pending&&<div className="rpdb-message rpdb-warning" role="status"><p>当前数据库有未保存修改，切换会放弃这些修改。</p><div className="rpdb-actions"><button type="button" onClick={()=>void openDatabase(pending.id,pending.version)}>放弃修改并切换</button><button type="button" onClick={()=>setPending(null)}>继续编辑</button></div></div>}
       {!db?<div className="rpdb-empty rpdb-welcome"><DatabaseIcon size={34}/><h3>{busy==='load'?'正在读取版本…':'选择一个数据库开始'}</h3><p>把人物、地点与叙事线索整理为条目，独立设置 Agent 只读与选材方式。</p></div>:<>
         <div className="rpdb-editor-heading"><div className="rpdb-section-title"><h3>源版本编辑</h3><span className="rpdb-badge">v{db.version}{draft.dirty?' · 未保存':''}</span></div><label className="rpdb-field"><span>数据库名称</span><input value={db.name} disabled={blocked} onChange={event=>edit(value=>({...value,name:event.target.value}))}/></label><p className="rpdb-help">源版本与故事固定版本分别管理。保存不会自动应用。</p></div>
         <div className="rpdb-editor"><section className="rpdb-entries" aria-label="条目列表"><div className="rpdb-section-title"><h3>条目</h3><button type="button" className="rpdb-text-button" disabled={blocked} onClick={()=>{const id=globalThis.crypto.randomUUID();edit(value=>({...value,entries:[...value.entries,{id,title:'新条目',content:'',keywords:[],tags:[],notes:'',readOnly:false,mode:'auto',version:1}]}));setEntryId(id)}}>添加条目</button></div><div className="rpdb-entry-list">{db.entries.map(item=><button type="button" className={`rpdb-entry-item${entryId===item.id?' is-selected':''}`} key={item.id} aria-pressed={entryId===item.id} onClick={()=>setEntryId(item.id)}><strong>{item.title || '未命名条目'}</strong><small>{modes[item.mode]}{item.readOnly?' · Agent 只读':''}</small></button>)}{!db.entries.length&&<p className="rpdb-help">还没有条目</p>}</div></section>
           <section className="rpdb-entry-editor" aria-label="条目编辑">{selected?<><div className="rpdb-section-title"><h3>条目设置</h3><button type="button" className="rpdb-text-button rpdb-danger" disabled={blocked} onClick={()=>{edit(value=>({...value,entries:value.entries.filter(item=>item.id!==selected.id)}));setEntryId(db.entries.find(item=>item.id!==selected.id)?.id ?? null)}}>删除条目</button></div><label className="rpdb-field"><span>条目标题</span><input value={selected.title} disabled={blocked} onChange={event=>editEntry({title:event.target.value})}/></label><div className="rpdb-policy"><label className="rpdb-check"><input type="checkbox" checked={selected.readOnly} disabled={blocked} onChange={event=>editEntry({readOnly:event.target.checked})}/><span>Agent 只读</span></label><label className="rpdb-field"><span>选材方式</span><select value={selected.mode} disabled={blocked} onChange={event=>editEntry({mode:event.target.value})}>{Object.entries(modes).map(([value,name])=><option value={value} key={value}>{name}</option>)}</select></label></div><p className="rpdb-help">Agent 只读限制 Agent 修改；选材方式控制检索与入选。你始终可以编辑这两项。</p><label className="rpdb-field"><span>条目正文</span><textarea rows={10} spellCheck={false} value={selected.content} disabled={blocked} onChange={event=>editEntry({content:event.target.value})}/></label><div className="rpdb-pair"><label className="rpdb-field"><span>关键词</span><textarea rows={2} value={selected.keywords.join('\n')} disabled={blocked} onChange={event=>editEntry({keywords:event.target.value.split('\n')})}/></label><label className="rpdb-field"><span>标签</span><textarea rows={2} value={selected.tags.join('\n')} disabled={blocked} onChange={event=>editEntry({tags:event.target.value.split('\n')})}/></label></div><p className="rpdb-help">关键词与标签每行一个。</p><label className="rpdb-field"><span>叙事备注</span><textarea rows={3} value={selected.notes} disabled={blocked} onChange={event=>editEntry({notes:event.target.value})}/></label><small className="rpdb-id">条目 ID · {selected.id} · v{selected.version}</small></>:<div className="rpdb-empty">添加或选择条目，开始编辑内容。</div>}</section>
         </div>
-        <div className="rpdb-save-bar"><div className="rpdb-actions"><button type="button" className="rpdb-primary" disabled={blocked || !draft.dirty || !db.name.trim()} onClick={save}>{busy==='save'?'正在保存…':'保存新版本'}</button><button type="button" disabled={blocked} onClick={()=>void openDatabase(db.id,undefined)}>重新载入数据库</button><button type="button" disabled={blocked || draft.dirty || !sessionId} onClick={bind}>{busy==='bind'?'正在应用…':'应用到当前故事'}</button></div><p className="rpdb-help">应用会重置当前故事覆盖与临时备注。{draft.dirty?'先保存新版本，再应用。重新载入会放弃未保存修改。':`编辑 v${db.version} · 基于修订 ${draft.baseRevision}`}</p></div>
+        <div className="rpdb-save-bar"><div className="rpdb-actions"><button type="button" className="rpdb-primary" disabled={blocked || !draft.dirty || !db.name.trim()} onClick={save}>{busy==='save'?'正在保存…':'保存新版本'}</button><button type="button" disabled={blocked} onClick={()=>void openDatabase(db.id,undefined)}>重新载入数据库</button><button type="button" disabled={blocked || draft.dirty || !sessionId} onClick={()=>bind()}>{busy==='bind'?'正在应用…':'应用到当前故事'}</button></div><p className="rpdb-help">应用会重置当前故事覆盖与临时备注。{draft.dirty?'先保存新版本，再应用。重新载入会放弃未保存修改。':`编辑 v${db.version} · 基于修订 ${draft.baseRevision}`}</p></div>
         {draft.sourceId&&<section className="rpdb-source"><div className="rpdb-section-title"><h3>导入原件</h3><button type="button" className="rpdb-text-button" disabled={sourceBusy || blocked} onClick={()=>void viewSource()}>{sourceBusy?'正在读取原件…':'查看只读原件'}</button></div><p className="rpdb-help">原始文本仅供核对与回溯。</p>{source&&<><label className="rpdb-field"><span>原始 JSON（只读）</span><textarea rows={10} spellCheck={false} value={source.rawText} readOnly/></label><small className="rpdb-hash">SHA-256 · {source.sha256}</small></>}</section>}
         {!!diagnostics.length&&<ul className="rpdb-diagnostics">{diagnostics.map((item,index)=><li key={index}>{item.message ?? String(item)}</li>)}</ul>}
       </>}
-      <section className="rpdb-search" aria-label="搜索检查"><div className="rpdb-section-title"><h3>当前故事搜索</h3></div><div className="rpdb-retrieval"><span>向量检索{retrieval?.embedding?.configured?`已配置 · ${retrieval.embedding.model ?? '默认模型'}`:'未配置'}</span><span>重排{retrieval?.reranking?.configured?`已配置 · ${retrieval.reranking.model ?? '默认模型'}`:'未配置'}</span></div><p className="rpdb-help">检查当前故事有效条目的检索结果与命中理由。未配置或失败时使用可用检索方式。</p><div className="rpdb-search-form"><label className="rpdb-field"><span>搜索条目</span><input value={query} placeholder="输入情节、人物或关键词" onChange={event=>{++searchSequence.current;setQuery(event.target.value);setResults(null);setSearchBusy(false)}} onKeyDown={event=>{if(event.key==='Enter' && binding)void search()}}/></label><button type="button" disabled={!binding || !query.trim() || searchBusy} onClick={()=>void search()}>{searchBusy?'正在搜索…':'搜索'}</button></div>{!binding&&<p className="rpdb-help">应用数据库到当前故事后，可检查搜索结果。</p>}{results&&<div className="rpdb-results"><div className="rpdb-degraded" role="status" aria-label="搜索降级状态">{results.degraded.map(code=><span key={code}>{degradation(code)}</span>)}</div><p className="rpdb-help">必开条目：{results.required.map(id=>binding?.entries.find(item=>item.id===id)?.title || id).join('、') || '无'}</p>{results.candidates.map(candidate=><article key={candidate.id}><div className="rpdb-section-title"><strong>{binding?.entries.find(item=>item.id===candidate.id)?.title || candidate.id}</strong><span>得分 {Number(candidate.score).toFixed(3)}</span></div><ul>{candidate.reasons.map((reason,index)=><li key={index}>{reason}</li>)}</ul></article>)}{!results.candidates.length&&<p className="rpdb-help">没有匹配的条目。</p>}</div>}</section>
+      <section className="rpdb-search" aria-label="搜索检查"><div className="rpdb-section-title"><h3>当前故事搜索</h3></div><div className="rpdb-retrieval"><span>向量检索{retrieval?.embedding?.configured?`已配置 · ${retrieval.embedding.model ?? '默认模型'}`:'未配置'}</span><span>重排{retrieval?.reranking?.configured?`已配置 · ${retrieval.reranking.model ?? '默认模型'}`:'未配置'}</span></div><p className="rpdb-help">检查当前故事有效条目的检索结果与命中理由。未配置或失败时使用可用检索方式。</p><div className="rpdb-search-form"><label className="rpdb-field"><span>搜索条目</span><input value={query} placeholder="输入情节、人物或关键词" onChange={event=>{++searchSequence.current;setQuery(event.target.value);setResults(null);setSearchBusy(false)}} onKeyDown={event=>{if(event.key==='Enter' && binding)void search()}}/></label><button type="button" disabled={!binding || !query.trim() || searchBusy} onClick={()=>void search()}>{searchBusy?'正在搜索…':'搜索'}</button></div>{!binding&&<p className="rpdb-help">应用数据库到当前故事后，可检查搜索结果。</p>}{results&&<div className="rpdb-results"><div className="rpdb-degraded" role="status" aria-label="搜索降级状态">{results.degraded.map(code=><span key={code}>{degradation(code)}</span>)}</div><p className="rpdb-help">必开条目：{results.required.map(searchLabel).join('、') || '无'}</p>{results.candidates.map(candidate=><article key={itemKey(candidate)}><div className="rpdb-section-title"><strong>{searchLabel(candidate)}</strong><span>得分 {Number(candidate.score).toFixed(3)}</span></div><ul>{candidate.reasons.map((reason,index)=><li key={index}>{reason}</li>)}</ul></article>)}{!results.candidates.length&&<p className="rpdb-help">没有匹配的条目。</p>}</div>}</section>
     </main></div>}
   </>
 }

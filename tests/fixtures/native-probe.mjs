@@ -4,8 +4,24 @@ export const inject=['llm','agents','tools','connection','typertGateway']
 async function* textChunks(text){yield{type:'block-start',index:0,blockType:'text'};yield{type:'text-delta',index:0,text};yield{type:'block-end',index:0,block:{type:'text',text}};yield{type:'usage',usage:{inputTokens:10,outputTokens:10}};yield{type:'finish',reason:{kind:'stop'}}}
 async function* toolChunks(name,args){const id='reused-smoke-wire-id';yield{type:'block-start',index:0,blockType:'tool-call'};yield{type:'tool-call-delta',index:0,id,name,argumentsDelta:JSON.stringify(args)};yield{type:'block-end',index:0,block:{type:'tool-call',id,name,arguments:JSON.stringify(args)}};yield{type:'finish',reason:{kind:'tool-calls'}}}
 export function apply(ctx){
- const calls=[]
+ const calls=[],factModes=new Set(),factEvidence=new Map()
  const invoke=(method,request,signal)=>ctx.typertGateway.invoke({namespace:'session',method,args:{request},peer:ctx.connection.browserPeer,signal})
+ ctx.tools.register({name:'rp_commit_turn',description:'Synthetic Database receipt acceptance fixture only',parameters:{type:'object',properties:{},additionalProperties:false},output:{schema:{type:'object'},render:(_args,value)=>[{type:'text',text:JSON.stringify(value)}]},execute:async(_args,exec)=>{
+  const agent=exec.agent,service=ctx.get('rpDatabase'),access=await service.factAccess({sessionId:agent.session.id,agent,signal:exec.signal})
+  const events=agent.session.snapshotEvents().map(row=>row.type==='event'?row.event:row),call=events.findLast(event=>event.type==='tool/call'&&event.data?.name==='rp_commit_turn')
+  const assistant=events.findLast(event=>event.type==='assistant/message'&&event.seq<call.seq&&event.data?.turn===call.data.turn&&event.data?.step===call.data.step&&event.data.message.content.some(block=>block.type==='tool-call'&&block.id===call.data.callId&&block.name==='rp_commit_turn'))
+  const start=events.findLast(event=>event.type==='turn/start'&&event.seq<assistant.seq),before=await access.snapshot()
+  const source={assistantMessageId:assistant.data.message.id,callId:call.data.callId,callSeq:call.seq,turnStartSeq:start.seq}
+  const input={turnKey:JSON.stringify([agent.session.id,start.seq]),source,expectedRevision:before.revision,operations:[{op:'update',ref:{sourceKey:'@session',entryId:'gm.facts'},patch:{content:JSON.stringify({schemaVersion:1,items:[{id:'accepted',text:'Native synthetic fact'}]})}}],summary:'Synthetic fact once',packet:{playerAction:'Synthetic action',resolvedChanges:['Native synthetic fact']},kind:'turn'}
+  const receipt=await access.commit(input),duplicate=await access.commit(input)
+  let conflict,materialCode
+  try{await access.commit({...input,summary:'Conflicting second submission'})}catch(error){conflict={code:error.code,receiptId:error.receiptId}}
+  const material=await service.materialAccess({sessionId:agent.session.id,agent,signal:exec.signal})
+  try{await material.commit({operations:[{op:'note',id:'["@session","work"]',text:'must not persist'},{op:'update',id:'["@session","gm.facts"]',patch:{content:JSON.stringify({schemaVersion:1,items:[]})}}],expectedRevision:receipt.databaseRevision})}catch(error){materialCode=error.code}
+  const after=await access.snapshot()
+  factEvidence.set(agent.session.id,{receipt,duplicateSame:duplicate.id===receipt.id,conflict,materialCode,atomic:after.revision===receipt.databaseRevision&&after.notes.length===0,factVersion:after.entries.find(entry=>entry.id==='gm.facts').version})
+  return receipt
+ }})
  const adapter={providerInfo:id=>({id,name:id}),providerRetryPolicy:()=>undefined,imageRequestPricing:()=>undefined,imageRequestTarget:(_p,_m,v)=>v,
  listModels:async provider=>[{provider,id:'main',name:'main'}],resolveModel:async(provider,id)=>({provider,id,name:id}),
  async prepareCall(provider,id){return{model:await this.resolveModel(provider,id),stream:options=>this.stream(options)}},
@@ -14,6 +30,7 @@ export function apply(ctx){
   if(human<0){yield*textChunks('Synthetic database story');return}
   const agent=ctx.agents.currentInitiator(),tail=options.messages.slice(human+1)
   if(tail.some(m=>m.role==='tool')){yield*textChunks('故事条目已更新，来源保持不变。');return}
+  if(factModes.has(agent.session.id)){calls.push({kind:'fact-main',sessionId:agent.session.id});yield*toolChunks('rp_commit_turn',{});return}
   if(!options.tools?.some(tool=>tool.name==='rp_db_patch'))throw Error('Bound story is missing database tools')
   const state=await ctx.get('rpDatabase').catalog({sessionId:agent.session.id,agent})
   calls.push({kind:'main-patch',sessionId:agent.session.id})
@@ -26,6 +43,15 @@ export function apply(ctx){
   if(input.action==='run'){await invoke('prompt',{sessionId:input.sessionId,requestId:crypto.randomUUID(),mode:'queue',content:[{type:'text',text:'我关上门，查看门外脚印。'}]},request.signal);await ctx.agents.get(input.sessionId).whenIdle();return Response.json({calls})}
   const agent=ctx.agents.get(input.sessionId)
   if(!agent||agent.session.id!==input.sessionId)throw Error('Live fixture story required')
+  if(input.action==='setupFacts'){
+   if(!service.hasBinding(input.sessionId)){const state=await service.state();await service.bindSources({sessionId:input.sessionId,sources:[],expectedRevision:state.revision,resetOverlay:false})}
+   const state=await service.state(),entries=[{id:'gm.scene',content:JSON.stringify({schemaVersion:1,title:'Synthetic harbor',location:'Pier',presentActorIds:[]})},{id:'gm.facts',content:JSON.stringify({schemaVersion:1,items:[]})},{id:'work',content:'Synthetic working material'}]
+   const result=await service.initializeStoryState({sessionId:input.sessionId,entries,factEntryRefs:[{sourceKey:'@session',entryId:'gm.scene'},{sourceKey:'@session',entryId:'gm.facts'}],launchId:'native-fixture-'+input.sessionId,expectedRevision:state.revision})
+   factModes.add(input.sessionId);return Response.json(result)
+  }
+  if(input.action==='runFacts'){await invoke('prompt',{sessionId:input.sessionId,requestId:crypto.randomUUID(),mode:'queue',content:[{type:'text',text:'Synthetic fact turn'}]},request.signal);await agent.whenIdle();return Response.json({calls,evidence:factEvidence.get(input.sessionId)})}
+  if(input.action==='recoverFacts'){const access=await service.factAccess({sessionId:input.sessionId,agent,signal:request.signal});return Response.json({receipt:await access.getReceipt(input.receiptId),snapshot:await access.snapshot()})}
+  if(input.action==='catalogV2'||input.action==='effectiveV2')return Response.json(await service[input.action]({sessionId:input.sessionId,agent,signal:request.signal}))
   if(input.action==='catalog'||input.action==='effective')return Response.json(await service[input.action]({sessionId:input.sessionId,agent,signal:request.signal}))
   if(input.action==='read')return Response.json(await service.read({sessionId:input.sessionId,agent,entryIds:input.entryIds,signal:request.signal}))
   if(input.action==='rejectPolicies'){

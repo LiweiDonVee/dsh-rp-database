@@ -1,6 +1,6 @@
 {
   "name": "dsh-rp-database",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "DSH RP 动态数据库与会话继承",
   "license": "MIT",
   "type": "module",
@@ -18,7 +18,7 @@
   ],
   "engines": {
     "node": ">=24",
-    "dsh": ">=0.2.1-rc.2 <0.3.0-0"
+    "dsh": ">=0.2.1-rc.3 <0.3.0-0"
   },
   "dsh": {
     "bundle": {

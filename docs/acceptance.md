@@ -1,6 +1,20 @@
 # 数据库、主动上下文与最后一步组合验收
 
-0.1.1 导入兼容补修：51 项运行时＋15 项界面测试、lint 和构建通过。新版原生单包验收实际导入 ST 世界书映射和 V3 JSON 内嵌世界书，验证启停/必开、不可执行原件、持久报告、模型补丁与会话隔离、侧栏/全屏/520px/关闭重开；无浏览器运行错误。导入行为与边界见 [字段说明](sillytavern-import.md)。下文保留 0.1.0 完整链的历史验证范围。
+## 0.2.0 DB-A 基础检查点
+
+2026-10-25，实际官方 DSH **0.2.1-rc.3**、Node24.15.0、pnpm11.9.0，Windows 独立临时 DSH_HOME。`pnpm check`：79 项运行时、18 项界面测试、lint 与 build 通过。新增功能执行了真实 RED→GREEN：资格引用/迁移、多来源服务、阶段事实保护/幂等回执、精确 owner 路由/来源组合 UI；同 turn 来源替换的当前回执选择与 legacy 来源顺序/原件标识也有先失败的回归。
+
+`pnpm package` 生成 `artifacts/dsh-rp-database-0.2.0.tgz`，SHA256 `ca7ad0b9bf64effcac27198bf9d293abaf714a8ed9c34f0781622cd3c2029c91`。包内宿主范围为 `>=0.2.1-rc.3 <0.3.0-0`，没有运行时 workspace 依赖。未发布。
+
+`pnpm smoke` 使用当前官方安装，16 项原生断言通过：旧 ST/V3 导入、策略/会话隔离/原件不变；world/0 与 actor/0 独立；真实 native 合成 rp_commit_turn 的 source 通过校验；同输入重复一次、冲突带既有 receiptId、材料混合非法事实操作原子拒绝、tool 返回后可取回回执；owner UI 重新排序保留 gm.facts v2。侧栏/全屏/520px/关闭重开通过，浏览器 pageErrors=[]，窄屏 documentWidth=520。`docs/images/workspace.png` 为本轮原生多来源界面。
+
+首次 smoke 因 Playwright 1248 浏览器未缓存停在 browser 阶段；随后通过 `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=C:/Users/Owner/AppData/Local/ms-playwright/chromium-1217/chrome-win64/chrome.exe` 使用已安装 Chromium 1217，通过完整 smoke。`scripts/pack.mjs`/smoke 的既有 Windows shell spawn 产生 Node DEP0190 提示，不影响退出状态。证据位于 `.runtime/native-evidence/acceptance.json` 与同目录截图，临时 home 为 `.runtime/dsh-rp-database-smoke-1792929974291`；真实 `.dsh` 未变更。
+
+这是 Database 独立包的确定性合成工具验收，没有实际 GM/Context/Last Step 包的组合调用或付费模型。分叉 A→B 选 A、再回退到 A 前、v1 迁移、同回执原子写和插件重建恢复由运行时测试验证；本轮没有做原生进程冷重启/完整链分叉验收。文档提取、持久增量索引和 transfer/restore 为待 DB-B 实现范围。
+
+## 历史 0.1.1 / 0.1.0 记录
+
+0.1.1 导入兼容补修：51 项运行时＋15 项界面测试、lint 和构建通过。该版本原生单包验收实际导入 ST 世界书映射和 V3 JSON 内嵌世界书，验证启停/必开、不可执行原件、持久报告、模型补丁与会话隔离、侧栏/全屏/520px/关闭重开；无浏览器运行错误。导入行为与边界见 [字段说明](sillytavern-import.md)。下文保留 0.1.0 完整链的历史验证范围。
 
 2026-10-25，官方 DSH 0.2.1-rc.2，Node24、pnpm11.9，独立临时 DSH home。提供方、embedding、rerank、GM、摘要与 writer 全部是明确标识的本地确定性 fixture，没有真实付费推理或用户角色卡。
 

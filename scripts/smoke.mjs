@@ -5,7 +5,8 @@ import {resolve,join} from 'node:path'
 import {chromium} from '@playwright/test'
 
 const packageName="dsh-rp-database",root=process.cwd(),home=resolve('.runtime/'+packageName+'-smoke-'+Date.now()),evidence=resolve('.runtime/native-evidence')
-const artifact=resolve('artifacts/'+packageName+'-0.1.1.tgz')
+const manifest=JSON.parse(await readFile('package.json','utf8'))
+const artifact=resolve('artifacts/'+packageName+'-'+manifest.version+'.tgz')
 const artifactSHA256=createHash('sha256').update(await readFile(artifact)).digest('hex')
 const cli=process.env.DSH_BIN??(process.platform==='win32'?join(process.env.LOCALAPPDATA??'','Programs/DeepSeek Harness/resources/runtime/cli/bin/dsh.cmd'):'dsh')
 const quote=value=>process.platform==='win32'?'"'+value+'"':value
@@ -13,7 +14,7 @@ const env={...process.env,DSH_HOME:home,DEEPSEEK_API_KEY:'native-smoke-placehold
 const redact=value=>String(value).replace(/([?&]token=)[^\s"'<>]+/gu,'$1[REDACTED]').replace(/(Bearer\s+)[\w.-]+/giu,'$1[REDACTED]')
 await mkdir(home,{recursive:true});await mkdir(evidence,{recursive:true})
 await writeFile(join(home,'package.json'),JSON.stringify({name:packageName+'-smoke-home',private:true,type:'module'}))
-let host,browser,page,logs='',stage='install',result={passed:false,status:'running',artifactSHA256,standalone:true,packageName},errors=[]
+let host,browser,page,logs='',stage='install',result={passed:false,status:'running',artifactSHA256,standalone:true,packageName,packageVersion:manifest.version},errors=[]
 const save=()=>writeFile(join(evidence,'acceptance.json'),JSON.stringify(result,null,2))
 await save()
 const kill=child=>new Promise(done=>{if(!child?.pid)return done();if(process.platform==='win32')execFile('taskkill.exe',['/PID',String(child.pid),'/T','/F'],{windowsHide:true},()=>done());else{child.kill('SIGTERM');done()}})
@@ -25,6 +26,7 @@ const install=()=>new Promise((done,reject)=>{
 })
 const assert=(condition,message)=>{if(!condition)throw Error(message)}
 try{
+ result.hostVersion=await new Promise((done,reject)=>{const child=spawn(quote(cli),['--version'],{shell:process.platform==='win32',windowsHide:true,cwd:root,env,stdio:'pipe'});let output='';child.stdout.on('data',data=>output+=data);child.on('error',reject);child.on('exit',code=>code===0?done(output.trim()):reject(Error('Could not read native host version')))})
  await install()
  const fixture=join(home,'native-probe.mjs');await writeFile(fixture,await readFile('tests/fixtures/native-probe.mjs'))
  const patch=join(home,'probe.patch.yml')
@@ -79,6 +81,24 @@ try{
  assert(embeddedData.database.name==='内嵌验收世界书'&&embeddedData.database.entries[0].id==='0'&&embeddedData.database.entries[1].mode==='disabled'&&!JSON.stringify(embeddedData.database).includes('CARD_INSTRUCTIONS_NOT_DATABASE'),'Embedded V3 book import failed')
  const checks={ownerCreate:true,ownerImport:true,stWorldbookMap:true,embeddedCharacterBook:true,unsupportedBehaviorReported:true,readOnly:true,required:true,disabledCatalogAndRead:true,nativePatch:true,storyIsolation:true,sourceExact:true}
 
+ stage='qualified-facts'
+ state=await api('state')
+ const actorSource=await api('import',{rawText:JSON.stringify({name:'Actor source',entries:[{id:'0',title:'Actor zero',content:'Actor zero is distinct.'}]}),expectedRevision:state.revision})
+ const factStory=await probe({action:'create'})
+ await api('bindSources',{sessionId:factStory.sessionId,sources:[{key:'world',databaseId:embedded.databaseId,version:1},{key:'actor',databaseId:actorSource.databaseId,version:1}],expectedRevision:actorSource.revision,resetOverlay:false})
+ await probe({action:'setupFacts',sessionId:factStory.sessionId})
+ const factRun=await probe({action:'runFacts',sessionId:factStory.sessionId}),factProof=factRun.evidence
+ assert(factRun.calls.filter(call=>call.kind==='fact-main'&&call.sessionId===factStory.sessionId).length===1,'Synthetic fact tool was not requested once')
+ assert(factProof?.duplicateSame&&factProof.conflict?.code==='TURN_ALREADY_COMMITTED'&&factProof.conflict.receiptId===factProof.receipt.id,'Native fact duplicate/conflict was not stable')
+ assert(factProof.materialCode==='FACT_OWNER_REQUIRED'&&factProof.atomic&&factProof.factVersion===2,'Native material stage bypassed factual ownership or atomicity')
+ const recovered=await probe({action:'recoverFacts',sessionId:factStory.sessionId,receiptId:factProof.receipt.id})
+ assert(recovered.receipt.id===factProof.receipt.id,'Native receipt could not be recovered after its tool returned')
+ const zero=recovered.snapshot.entries.filter(entry=>entry.id==='0')
+ assert(zero.length===2&&zero[0].ref.sourceKey==='world'&&zero[1].ref.sourceKey==='actor'&&zero[0].content!==zero[1].content,'Qualified same-ID native entries aliased')
+ assert(!recovered.snapshot.entries.some(entry=>entry.mode==='disabled'),'Agent snapshot leaked a disabled entry')
+ checks.qualifiedSameID=true;checks.nativeFactReceiptOnce=true;checks.nativeMaterialGuard=true;checks.nativeReceiptRecovery=true
+ result.factEvidence={sessionId:factStory.sessionId,receiptId:factProof.receipt.id,source:factProof.receipt.source,databaseRevision:factProof.receipt.databaseRevision}
+
  stage='native-ui'
  await page.evaluate(id=>window.__workspaceCtx.get('uiWorkspace').openSession(id),sessionId)
  await page.getByRole('button',{name:"打开故事数据库",exact:true}).click()
@@ -109,6 +129,22 @@ try{
  await panel.waitFor({state:'hidden'})
  await page.getByRole('button',{name:"打开故事数据库",exact:true}).click();await panel.waitFor({state:'visible'})
  await page.screenshot({path:join(evidence,'native-reopened.png')})
+
+ stage='qualified-native-ui'
+ await page.evaluate(id=>window.__workspaceCtx.get('uiWorkspace').openSession(id),factStory.sessionId)
+ await page.getByRole('button',{name:'打开故事数据库',exact:true}).click()
+ const qualifiedPanel=page.locator(`[data-rp-database-session="${factStory.sessionId}"]`)
+ await qualifiedPanel.waitFor({state:'visible'})
+ await qualifiedPanel.getByRole('button',{name:'当前故事内容与变更',exact:true}).click()
+ await qualifiedPanel.getByText('world / 0',{exact:true}).waitFor()
+ await qualifiedPanel.getByText('actor / 0',{exact:true}).waitFor()
+ await qualifiedPanel.getByRole('button',{name:'上移来源 actor',exact:true}).click()
+ await qualifiedPanel.getByRole('button',{name:'保存故事来源',exact:true}).click()
+ await qualifiedPanel.getByText('故事来源已保存，兼容的覆盖已保留。',{exact:true}).waitFor()
+ const reordered=await probe({action:'effectiveV2',sessionId:factStory.sessionId})
+ assert(reordered.binding.sources[0].key==='actor'&&reordered.entries.find(entry=>entry.id==='gm.facts').version===2,'Native source reorder lost facts')
+ await page.screenshot({path:join(evidence,'native-qualified-sources.png')})
+ checks.nativeSourceComposition=true
  assert(errors.length===0,'Browser page errors: '+JSON.stringify(errors))
  result={...result,passed:true,status:'passed',checks,layoutMetrics,pageErrors:errors};await save();console.log(JSON.stringify(result))
 }catch(error){
