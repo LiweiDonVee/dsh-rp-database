@@ -182,7 +182,11 @@ export function createDatabaseStore({ directory }) {
         if (fromId === toId || state.sessions[hash(toId)]) error('SESSION_EXISTS', 'Fork requires a distinct unbound child session', 409);
         const parent = sessionRecord(state, fromId);
         const effective = project(parent, { activeAnchors, currentAnchor });
-        const child = { id: toId, databaseId: parent.databaseId, version: parent.version, sourceId: parent.sourceId, baseline: effective.entries, baselineNotes: effective.notes, reservedIds: [...parent.reservedIds], changes: [] };
+        // Retain inherited causal changes so a child rollback into its seed can
+        // exclude them. Flattening to effective.entries would make them permanent.
+        const inherited = effective.changes.map(change => ({ ...change, operations: change.operations.filter(operation => operation.op !== 'note' || change.anchor === currentAnchor) }));
+        const baselineNotes = (parent.baselineNotes ?? []).filter(note => note.anchor === currentAnchor);
+        const child = { id: toId, databaseId: parent.databaseId, version: parent.version, sourceId: parent.sourceId, baseline: structuredClone(parent.baseline), baselineNotes, reservedIds: [...parent.reservedIds], changes: inherited };
         state.sessions[hash(toId)] = child;
         return { session: project(child, { currentAnchor }), databaseId: child.databaseId, version: child.version };
       });

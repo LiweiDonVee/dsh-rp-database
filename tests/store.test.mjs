@@ -11,6 +11,15 @@ async function fixture(t) {
   return { store: createDatabaseStore({ directory }), directory, reopen: () => createDatabaseStore({ directory }) };
 }
 const raw = ' {"name":"World","entries":[{"id":"hero","title":"英雄","content":"原始","notes":"传闻","readOnly":false,"mode":"auto"},{"id":"required","content":"must","mode":"required"},{"id":"disabled","content":"hidden","mode":"disabled"}]}\n';
+
+test('a child can roll back inherited parent changes instead of retaining a flattened fork baseline', async (t) => {
+  const { store } = await fixture(t);
+  const imported = await store.importSource(JSON.stringify({ name: 'branch', entries: [{ id: 'a', content: 'original' }] }), { expectedRevision: 0 });
+  await store.bindSession('parent', { databaseId: imported.databaseId, version: 1, expectedRevision: imported.revision });
+  await store.applyOperations('parent', [{ op: 'update', id: 'a', patch: { content: 'later' } }], { expectedRevision: 2, anchor: 'parent-later' });
+  await store.forkSession('parent', 'child', { activeAnchors: ['parent-later'], expectedRevision: 3 });
+  assert.equal((await store.session('child', { activeAnchors: [] })).entries[0].content, 'original');
+});
 async function bind(store, sessionId = 'story') {
   const imported = await store.importSource(raw, { expectedRevision: 0 });
   await store.bindSession(sessionId, { databaseId: imported.databaseId, version: 1, expectedRevision: 1 });
@@ -91,13 +100,13 @@ test('rollback excludes inactive anchors and temporary notes last only their cur
   assert.equal(branched.entries[0].version, 3);
 });
 
-test('fork snapshots active state and policy into an independent child baseline', async t => {
+test('fork inherits the selected causal prefix and policy into an independent child', async t => {
   const { store } = await fixture(t);
   const imported = await bind(store);
   await store.applyOperations('story', [{ op: 'update', id: 'hero', patch: { content: 'fork point' } }], { expectedRevision: 2, anchor: 'a1' });
   await store.applyOperations('story', [{ op: 'update', id: 'hero', patch: { content: 'future' } }], { expectedRevision: 3, anchor: 'a2' });
   await store.forkSession('story', '__proto__', { activeAnchors: ['a1'], expectedRevision: 4 });
-  assert.equal((await store.session('__proto__', { activeAnchors: [] })).entries[0].content, 'fork point');
+  assert.equal((await store.session('__proto__', { activeAnchors: ['a1'] })).entries[0].content, 'fork point');
   assert.equal((await store.session('__proto__')).entries[1].mode, 'required');
   await store.applyOperations('__proto__', [{ op: 'update', id: 'hero', patch: { content: 'child' } }], { expectedRevision: 5, anchor: 'child1' });
   assert.equal((await store.session('story')).entries[0].content, 'future');
