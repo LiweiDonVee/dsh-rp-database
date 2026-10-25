@@ -1,0 +1,26 @@
+{
+  "spec": "chara_card_v3",
+  "spec_version": "3.0",
+  "data": {
+    "name": "合成角色示例",
+    "description": "这不是可玩角色包；仅演示内嵌世界书提取。",
+    "first_mes": "开场不应被当作世界书条目导入。",
+    "character_book": {
+      "name": "内嵌世界书示例",
+      "entries": [
+        {
+          "id": 0,
+          "keys": ["旧信"],
+          "secondary_keys": ["档案"],
+          "comment": "档案中的信件",
+          "content": "信上写着一个尚未兑现的约定；是否被角色知晓由 GM 判断。",
+          "enabled": true,
+          "constant": false,
+          "insertion_order": 100,
+          "position": "before_char",
+          "extensions": {}
+        }
+      ]
+    }
+  }
+}

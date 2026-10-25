@@ -6,17 +6,17 @@
 
 ## 安装
 
-已验证目标 DSH 0.2.1-rc.2。下载 Release 的 `dsh-rp-database-0.1.0.tgz`，完全退出 DSH 后执行，再重启：
+已验证目标 DSH 0.2.1-rc.2。下载 Release 的 `dsh-rp-database-0.1.1.tgz`，完全退出 DSH 后执行，再重启：
 
 ```powershell
-dsh plugin --profile desktop add ./dsh-rp-database-0.1.0.tgz
+dsh plugin --profile desktop add ./dsh-rp-database-0.1.1.tgz
 ```
 
 Web 模式将 desktop 改为 web。点击会话顶部 **数据库** 或右侧新增页签中的 **故事数据库**。Windows 找不到 dsh 时可使用默认官方启动器：
 
 ```powershell
 $dshCli = Join-Path $env:LOCALAPPDATA 'Programs/DeepSeek Harness/resources/runtime/cli/bin/dsh.cmd'
-& $dshCli plugin --profile desktop add ./dsh-rp-database-0.1.0.tgz
+& $dshCli plugin --profile desktop add ./dsh-rp-database-0.1.1.tgz
 ```
 
 ## 使用
@@ -31,6 +31,16 @@ $dshCli = Join-Path $env:LOCALAPPDATA 'Programs/DeepSeek Harness/resources/runti
 人物知情、误解、传闻和揭示条件写在自由文本 **叙事备注**，由中间 GM 判断；插件不建立 NPC 权限表。资料、提案和已确认事实的区别也应在备注中说明，普通条目编辑不替代已有规则工具的结算。
 
 分叉继承有效来源变化，回退后不再使用失效分支的覆盖；原始文本和变化记录仍保留供回溯。临时备注属于其创建的准备步骤，不自动变成永久世界事实。
+
+## SillyTavern 导入范围
+
+支持独立世界书 JSON 的 entries 映射、常见 ST 条目数组、标准 Character Book，以及角色卡 V2／V3 JSON 中的 character_book / data.character_book。只提取其中的世界书，不把角色系统指令、开场或其他角色字段冒充数据库条目；PNG/APNG 角色卡与压缩包尚未支持。
+
+正文、标题、ID、关键词、启停和常驻条目会映射；常驻转为必开，禁用优先。源 displayIndex 用于稳定整理导入条目。源里的禁止覆盖标记不会自动变成人类设置的 Agent 锁。
+
+正则、复杂宏、AND/NOT 激活条件、概率、递归、深度位置、粘滞/冷却和角色过滤只保留来源，导入报告明确列出，不执行或宣称复现。否定次级键不会转成正向检索词。报告随原件保存，重新打开仍能查看。
+
+[完整字段映射与示例](docs/sillytavern-import.md) · [SillyTavern 功能对照](docs/sillytavern-comparison.md)。
 
 ## 检索与模型
 
