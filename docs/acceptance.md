@@ -2,6 +2,16 @@
 
 ## 0.2.0 DB-A 基础检查点
 
+### 审查修复轮 1 — 2026-10-25
+
+独立审查 F1/F2 已定向修复：旧 material facade 的 apply 使用宿主当前注册事实 refs，不再保留初始化前的空保护集；空库且尚未绑定的故事可以从 owner UI 保存 sources:[]，已绑定空列表仍保持未修改时禁用保存。公开服务/planner DTO 未改变。
+
+两项回归先 RED 后 GREEN：旧 facade 跨初始化的混合非法事实 batch 在暂存/提交均返回 FACT_OWNER_REQUIRED，revision/备注/事实不变，合法工作 note 仍可暂存；真实 host/store/routes UI 测试验证首次空绑定、无全局库创建，以及旧 dirty/revision 行为。`pnpm check` 为 **80 runtime +19 UI**，lint/build 成功；package 成功。
+
+当前 0.2.0 tgz SHA256 为 `a8f621ecc1f7457c02db1fb7def16decba35f6c5194bafe294c1c2bfaae98548`。同一 Chromium1217 显式路径下实际官方 rc.3 native smoke 的 **18 checks true、pageErrors=[]**，新增 nativeInitialEmptyBinding 与 nativeMaterialStagingAfterInitialize，并保留所有原生回执/策略/来源 UI 回归。证据仍为 `.runtime/native-evidence/acceptance.json`，新增截图 `native-initial-empty-binding.png`。未进行整链或原生冷重启验收，DB-B 未开始。
+
+### 初始检查点（76961d6）
+
 2026-10-25，实际官方 DSH **0.2.1-rc.3**、Node24.15.0、pnpm11.9.0，Windows 独立临时 DSH_HOME。`pnpm check`：79 项运行时、18 项界面测试、lint 与 build 通过。新增功能执行了真实 RED→GREEN：资格引用/迁移、多来源服务、阶段事实保护/幂等回执、精确 owner 路由/来源组合 UI；同 turn 来源替换的当前回执选择与 legacy 来源顺序/原件标识也有先失败的回归。
 
 `pnpm package` 生成 `artifacts/dsh-rp-database-0.2.0.tgz`，SHA256 `ca7ad0b9bf64effcac27198bf9d293abaf714a8ed9c34f0781622cd3c2029c91`。包内宿主范围为 `>=0.2.1-rc.3 <0.3.0-0`，没有运行时 workspace 依赖。未发布。

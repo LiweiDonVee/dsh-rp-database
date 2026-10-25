@@ -45,9 +45,13 @@ export function apply(ctx){
   if(!agent||agent.session.id!==input.sessionId)throw Error('Live fixture story required')
   if(input.action==='setupFacts'){
    if(!service.hasBinding(input.sessionId)){const state=await service.state();await service.bindSources({sessionId:input.sessionId,sources:[],expectedRevision:state.revision,resetOverlay:false})}
+   const material=await service.materialAccess({sessionId:input.sessionId,agent,signal:request.signal})
    const state=await service.state(),entries=[{id:'gm.scene',content:JSON.stringify({schemaVersion:1,title:'Synthetic harbor',location:'Pier',presentActorIds:[]})},{id:'gm.facts',content:JSON.stringify({schemaVersion:1,items:[]})},{id:'work',content:'Synthetic working material'}]
    const result=await service.initializeStoryState({sessionId:input.sessionId,entries,factEntryRefs:[{sourceKey:'@session',entryId:'gm.scene'},{sourceKey:'@session',entryId:'gm.facts'}],launchId:'native-fixture-'+input.sessionId,expectedRevision:state.revision})
-   factModes.add(input.sessionId);return Response.json(result)
+   const fresh=await material.snapshot();let materialStagingCode
+   try{material.apply(fresh.entries,[{op:'note',id:'["@session","work"]',text:'must not stage'},{op:'update',id:'["@session","gm.facts"]',patch:{content:JSON.stringify({schemaVersion:1,items:[{id:'illegal',text:'material must not settle facts'}]})}}])}catch(error){materialStagingCode=error.code}
+   const after=await material.snapshot(),materialStagingAtomic=after.revision===result.revision&&after.notes.length===0&&JSON.parse(after.entries.find(entry=>entry.id==='gm.facts').content).items.length===0
+   factModes.add(input.sessionId);return Response.json({...result,materialStagingCode,materialStagingAtomic})
   }
   if(input.action==='runFacts'){await invoke('prompt',{sessionId:input.sessionId,requestId:crypto.randomUUID(),mode:'queue',content:[{type:'text',text:'Synthetic fact turn'}]},request.signal);await agent.whenIdle();return Response.json({calls,evidence:factEvidence.get(input.sessionId)})}
   if(input.action==='recoverFacts'){const access=await service.factAccess({sessionId:input.sessionId,agent,signal:request.signal});return Response.json({receipt:await access.getReceipt(input.receiptId),snapshot:await access.snapshot()})}

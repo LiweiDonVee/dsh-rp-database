@@ -136,7 +136,8 @@ export async function createDatabaseHost(ctx,options={}){
       })
     }),
     materialAccess:input=>run(input.signal,async signal=>{
-      const{value}=await currentV2(input,signal),bound={sessionId:input.sessionId,...input.agent?{agent:input.agent}:{}}
+      await currentV2(input,signal)
+      const bound={sessionId:input.sessionId,...input.agent?{agent:input.agent}:{}}
       return Object.freeze({
         version:2,
         snapshot:()=>run(input.signal,async signal=>enabled((await currentV2(bound,signal)).value)),
@@ -144,7 +145,11 @@ export async function createDatabaseHost(ctx,options={}){
           const result=await qualifiedSearch({...bound,query:args.query,limit:args.limit},signal)
           return{...result,candidates:result.candidates.map(candidate=>({...candidate,key:entryKey(candidate.ref)})),required:result.required.map(ref=>({key:entryKey(ref),ref}))}
         }),
-        apply:(entries,operations)=>applyScopedOperations(entries,plannerOperations(operations),{factEntryRefs:value.binding.factEntryRefs}),
+        apply:(entries,operations)=>{
+          const current=bindings.get(bound.sessionId)
+          if(stopped||!current)throw new DatabaseError('UNAVAILABLE','The material binding is no longer available',503)
+          return applyScopedOperations(entries,plannerOperations(operations),{factEntryRefs:current.binding.factEntryRefs})
+        },
         select:(entries,keys)=>{if(!Array.isArray(keys))throw new DatabaseError('INVALID_REFERENCE','Selected entryKeys must be an array');return selectScopedEntries(entries,keys.map(parseEntryKey))},
         commit:args=>run(args.signal??input.signal,signal=>genericCommit({...bound,operations:plannerOperations(args.operations),expectedRevision:args.expectedRevision},signal)),
       })

@@ -47,6 +47,20 @@ test('generic and material staging cannot mutate facts or commit a harmless sibl
   await stage.commit({operations:[plan[0]],expectedRevision:snapshot.revision})
   assert.equal((await stage.snapshot()).notes[0].text,'must not persist')
 })
+test('a material facade acquired before initialization protects newly registered facts during staging and commit',async t=>{
+  const {service,agent}=await fixture(t,{emptySources:true,initialize:false}),stage=await service.materialAccess({sessionId:'story',agent})
+  assert.deepEqual((await stage.snapshot()).binding.factEntryRefs,[])
+  await service.initializeStoryState({sessionId:'story',entries:[...stateSeeds(),{id:'work',content:'ordinary material'}],factEntryRefs:factRefs,launchId:'after-material-access',expectedRevision:1})
+  const snapshot=await stage.snapshot(),operations=[{op:'note',id:'["@session","work"]',text:'must not stage or persist'},{op:'update',id:'["@session","gm.facts"]',patch:{content:facts([{id:'illegal',text:'material cannot settle facts'}])}}]
+  assert.deepEqual(snapshot.binding.factEntryRefs,factRefs)
+  assert.throws(()=>stage.apply(snapshot.entries,operations),{code:'FACT_OWNER_REQUIRED'})
+  await assert.rejects(stage.commit({operations,expectedRevision:snapshot.revision}),{code:'FACT_OWNER_REQUIRED'})
+  const current=await stage.snapshot()
+  assert.equal(current.revision,snapshot.revision);assert.deepEqual(current.notes,[])
+  assert.deepEqual(JSON.parse(current.entries.find(entry=>entry.id==='gm.facts').content).items,[])
+  assert.deepEqual(JSON.parse(snapshot.entries.find(entry=>entry.id==='gm.facts').content).items,[])
+  assert.deepEqual(stage.apply(snapshot.entries,[operations[0]]).notes,[{ref:{sourceKey:'@session',entryId:'work'},text:'must not stage or persist'}])
+})
 test('one active fact turn persists receipt and operations atomically and replays despite a stale revision',async t=>{
   const {service,agent,directory}=await fixture(t),access=await service.factAccess({sessionId:'story',agent}),input=commitInput()
   const receipt=await access.commit(input)

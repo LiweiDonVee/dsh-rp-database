@@ -13,19 +13,36 @@ import {hostFixture} from '../fixtures/database-host.mjs'
 const disposers=[]
 beforeEach(()=>vi.stubGlobal('EventSource',class{addEventListener(){}close(){}}))
 afterEach(async()=>{cleanup();for(const dispose of disposers.splice(0))await dispose();vi.unstubAllGlobals()})
-async function fixture(){
+async function fixture({emptyUnbound=false}={}){
   const directory=await mkdtemp(join(tmpdir(),'rp-db-ui-sources-')),f=hostFixture(),service=await createDatabaseHost(f.ctx,{directory}),routes=createDatabaseRoutes(service),calls=[]
   disposers.push(async()=>{routes.close();await service.close();await rm(directory,{recursive:true,force:true})})
-  const world=await service.import({rawText:JSON.stringify({name:'World',entries:[{id:'0',title:'Same title',content:'World original'}]}),expectedRevision:0})
-  const actor=await service.import({rawText:JSON.stringify({name:'Actor',entries:[{id:'0',title:'Same title',content:'Actor original'}]}),expectedRevision:1})
   assertV2(service)
-  await service.bindSources({sessionId:'story',sources:[{key:'world',databaseId:world.databaseId,version:1},{key:'actor',databaseId:actor.databaseId,version:1}],expectedRevision:2,resetOverlay:false})
+  let world,actor
+  if(!emptyUnbound){
+    world=await service.import({rawText:JSON.stringify({name:'World',entries:[{id:'0',title:'Same title',content:'World original'}]}),expectedRevision:0})
+    actor=await service.import({rawText:JSON.stringify({name:'Actor',entries:[{id:'0',title:'Same title',content:'Actor original'}]}),expectedRevision:1})
+    await service.bindSources({sessionId:'story',sources:[{key:'world',databaseId:world.databaseId,version:1},{key:'actor',databaseId:actor.databaseId,version:1}],expectedRevision:2,resetOverlay:false})
+  }
   const client=createRpDatabaseApi(async(url,options)=>{calls.push(JSON.parse(options.body));return routes.request(new Request(url,options))})
-  render(<DatabaseWorkspace sessionId="story" client={client}/>);await screen.findByRole('region',{name:'故事来源组合'});await screen.findByLabelText('数据库名称')
+  render(<DatabaseWorkspace sessionId="story" client={client}/>);await screen.findByRole('region',{name:'故事来源组合'});if(!emptyUnbound)await screen.findByLabelText('数据库名称')
   return{service,agent:f.agent,calls,world,actor}
 }
 function assertV2(service){expect(service.apiVersion).toBe(2)}
 const click=name=>fireEvent.click(screen.getByRole('button',{name,exact:true}))
+it('creates an initial empty binding without a library and keeps an unchanged bound empty list disabled',async()=>{
+  const f=await fixture({emptyUnbound:true}),region=screen.getByRole('region',{name:'故事来源组合'})
+  expect(f.service.hasBinding('story')).toBe(false)
+  expect(within(region).getByRole('button',{name:'添加来源'})).toBeDisabled()
+  expect(within(region).getByRole('button',{name:'保存故事来源'})).toBeEnabled()
+  click('保存故事来源')
+  await screen.findByText('故事来源已保存，兼容的覆盖已保留。')
+  expect(f.calls.find(input=>input.action==='bindSources')).toEqual({action:'bindSources',sessionId:'story',sources:[],expectedRevision:0,resetOverlay:false})
+  expect(f.service.hasBinding('story')).toBe(true)
+  const snapshot=await f.service.effectiveV2({sessionId:'story'})
+  expect(snapshot.binding.sources).toEqual([]);expect(snapshot.revision).toBe(1)
+  expect((await f.service.state()).databases).toEqual([])
+  await waitFor(()=>expect(within(region).getByRole('button',{name:'保存故事来源'})).toBeDisabled())
+})
 it('shows qualified duplicate IDs and preserves overlay when the owner changes source order',async()=>{
   const f=await fixture()
   click('当前故事内容与变更')

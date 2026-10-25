@@ -1,7 +1,7 @@
 import React,{useEffect,useRef,useState} from 'react'
 
 const clone=value=>structuredClone(value)
-export function SourceComposition({sources,revision,databases,sessionId,visible,blocked,selected,onSave,onReload}){
+export function SourceComposition({sources,revision,databases,sessionId,bound,visible,blocked,selected,onSave,onReload}){
   const [draft,setDraft]=useState(()=>clone(sources)),[baseRevision,setBaseRevision]=useState(revision),[dirty,setDirty]=useState(false),[reset,setReset]=useState(false),[failure,setFailure]=useState(null),[notice,setNotice]=useState('')
   const generation=useRef(0)
   useEffect(()=>{if(!dirty){setDraft(clone(sources));setBaseRevision(revision)}},[sources,revision,dirty])
@@ -34,7 +34,7 @@ export function SourceComposition({sources,revision,databases,sessionId,visible,
       <div className="rpdb-actions"><button type="button" aria-label={`上移来源 ${source.key}`} disabled={blocked||index===0} onClick={()=>move(index,-1)}>上移</button><button type="button" aria-label={`下移来源 ${source.key}`} disabled={blocked||index===draft.length-1} onClick={()=>move(index,1)}>下移</button><button type="button" aria-label={`移除来源 ${source.key}`} disabled={blocked} onClick={()=>edit(draft.filter((_value,at)=>at!==index))}>移除来源</button></div>
     </li>)}</ol>
     {!draft.length&&<p className="rpdb-help">空来源列表可保存；故事内新增条目仍由当前故事独立维护。</p>}
-    <div className="rpdb-actions"><button type="button" disabled={blocked||!databases.length} onClick={add}>{selected?'添加所选版本为来源':'添加来源'}</button><button type="button" disabled={blocked||!sessionId||!dirty||invalid} onClick={()=>void save()}>保存故事来源</button></div>
+    <div className="rpdb-actions"><button type="button" disabled={blocked||!databases.length} onClick={add}>{selected?'添加所选版本为来源':'添加来源'}</button><button type="button" disabled={blocked||!sessionId||(!dirty&&bound)||invalid} onClick={()=>void save()}>保存故事来源</button></div>
     <p className="rpdb-help">移除或替换已有变化的来源需要明确重置。GM 初始化后的事实与回执不能在这里重置，需另开故事。{dirty?`来源草稿基于修订 ${baseRevision}`:''}</p>
     {invalid&&<p role="status" className="rpdb-help">来源槽位须唯一且不能为空，不能使用 @session；版本须为正整数。</p>}
     {failure&&<div className="rpdb-message rpdb-warning" role="alert">

@@ -48,6 +48,19 @@ try{
  const api=(action,input={})=>request('api/'+packageName.replace('dsh-','')+'/request',{action,...input})
  const probe=input=>request('api/native-smoke',input)
  const {sessionId}=await probe({action:'create'})
+ stage='initial-empty-source-native-ui'
+ await page.evaluate(id=>window.__workspaceCtx.get('uiWorkspace').openSession(id),sessionId)
+ await page.getByRole('button',{name:'打开故事数据库',exact:true}).click()
+ const emptyPanel=page.locator(`[data-rp-database-session="${sessionId}"]`)
+ const emptySave=emptyPanel.getByRole('button',{name:'保存故事来源',exact:true})
+ await emptySave.waitFor({state:'visible'})
+ assert(await emptySave.isEnabled(),'Unbound empty source list has no initial save entry')
+ assert(await emptyPanel.getByRole('button',{name:'添加来源',exact:true}).isDisabled(),'Empty library unexpectedly provides a source')
+ await emptySave.click();await emptyPanel.getByText('故事来源已保存，兼容的覆盖已保留。',{exact:true}).waitFor()
+ const emptyBinding=await api('effectiveV2',{sessionId}),emptyState=await api('state')
+ assert(emptyBinding.binding.sources.length===0&&emptyState.databases.length===0,'Initial empty UI binding created a global library or lost its binding')
+ assert(await emptySave.isDisabled(),'Unchanged bound empty list remained saveable')
+ await page.screenshot({path:join(evidence,'native-initial-empty-binding.png')})
  stage='database-policies'
  let state=await api('state')
  await api('create',{name:'空白验收数据库',expectedRevision:state.revision})
@@ -79,14 +92,16 @@ try{
  const cardRaw=JSON.stringify({spec:'chara_card_v3',spec_version:'3.0',data:{name:'合成角色',system_prompt:'CARD_INSTRUCTIONS_NOT_DATABASE',character_book:{name:'内嵌验收世界书',entries:[{id:0,keys:['旧信'],content:'只提取世界资料。',enabled:true},{keys:['停用'],content:'关闭项',enabled:false}]}}})
  const embedded=await api('import',{rawText:cardRaw,expectedRevision:state.revision}),embeddedData=await api('database',{databaseId:embedded.databaseId,version:embedded.version})
  assert(embeddedData.database.name==='内嵌验收世界书'&&embeddedData.database.entries[0].id==='0'&&embeddedData.database.entries[1].mode==='disabled'&&!JSON.stringify(embeddedData.database).includes('CARD_INSTRUCTIONS_NOT_DATABASE'),'Embedded V3 book import failed')
- const checks={ownerCreate:true,ownerImport:true,stWorldbookMap:true,embeddedCharacterBook:true,unsupportedBehaviorReported:true,readOnly:true,required:true,disabledCatalogAndRead:true,nativePatch:true,storyIsolation:true,sourceExact:true}
+ const checks={ownerCreate:true,ownerImport:true,stWorldbookMap:true,embeddedCharacterBook:true,unsupportedBehaviorReported:true,readOnly:true,required:true,disabledCatalogAndRead:true,nativePatch:true,storyIsolation:true,sourceExact:true,nativeInitialEmptyBinding:true}
 
  stage='qualified-facts'
  state=await api('state')
  const actorSource=await api('import',{rawText:JSON.stringify({name:'Actor source',entries:[{id:'0',title:'Actor zero',content:'Actor zero is distinct.'}]}),expectedRevision:state.revision})
  const factStory=await probe({action:'create'})
  await api('bindSources',{sessionId:factStory.sessionId,sources:[{key:'world',databaseId:embedded.databaseId,version:1},{key:'actor',databaseId:actorSource.databaseId,version:1}],expectedRevision:actorSource.revision,resetOverlay:false})
- await probe({action:'setupFacts',sessionId:factStory.sessionId})
+ const initialized=await probe({action:'setupFacts',sessionId:factStory.sessionId})
+ assert(initialized.materialStagingCode==='FACT_OWNER_REQUIRED'&&initialized.materialStagingAtomic,'A pre-initialization native material facade staged registered facts')
+ checks.nativeMaterialStagingAfterInitialize=true
  const factRun=await probe({action:'runFacts',sessionId:factStory.sessionId}),factProof=factRun.evidence
  assert(factRun.calls.filter(call=>call.kind==='fact-main'&&call.sessionId===factStory.sessionId).length===1,'Synthetic fact tool was not requested once')
  assert(factProof?.duplicateSame&&factProof.conflict?.code==='TURN_ALREADY_COMMITTED'&&factProof.conflict.receiptId===factProof.receipt.id,'Native fact duplicate/conflict was not stable')
