@@ -54,6 +54,15 @@ beforeEach(()=>{Events.instances=[];vi.stubGlobal('EventSource',Events)})
 afterEach(()=>{cleanup();vi.unstubAllGlobals()})
 
 describe('native database workspace',()=>{
+  it('restores the source import report on reload and clears it when selecting an unrelated database',async()=>{
+    const f=fixture()
+    f.overrides.database=input=>({revision:f.state.revision,database:clone(f.dbs.get(input.databaseId)),...input.databaseId==='db-a'?{importReport:{diagnostics:[{code:'ST_PROBABILITY',message:'概率激活只保留来源。'}]}}:{}})
+    await ready(f)
+    expect(await screen.findByText('概率激活只保留来源。')).toBeInTheDocument()
+    click('重新载入数据库');await screen.findByText('概率激活只保留来源。')
+    click('山城故事 · v1 · 1 条');await screen.findByDisplayValue('山城故事')
+    expect(screen.queryByText('概率激活只保留来源。')).not.toBeInTheDocument()
+  })
   it('imports the exact raw source and displays the original only as inert readonly text',async()=>{
     const f=fixture({empty:true});render(<DatabaseWorkspace sessionId="story-a" client={f.client}/>)
     await screen.findByText('还没有数据库')

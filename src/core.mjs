@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { parseWorldbook } from './worldbook.mjs';
 
 export class DatabaseError extends Error {
   constructor(code, message, status = 400) {
@@ -57,27 +58,13 @@ export function importDatabase(rawText, { name } = {}) {
   let parsed;
   try { parsed = JSON.parse(rawText.replace(/^\uFEFF/u,'')); } catch { fail('INVALID_JSON', 'Source must contain valid JSON'); }
   if (!record(parsed)) fail('INVALID_DATA', 'Source must contain an object');
-  let entries;
-  let format;
-  if (Array.isArray(parsed.entries)) {
-    format = 'rp-database';
-    entries = parsed.entries;
-  } else if (record(parsed.entries)) {
-    format = 'st-worldbook';
-    entries = Object.entries(parsed.entries).map(([key, value]) => {
-      if (!record(value)) fail('INVALID_DATA', 'Worldbook entries must be objects');
-      if (value.disable !== undefined && typeof value.disable !== 'boolean') fail('INVALID_DATA', 'Worldbook disable must be a boolean');
-      if (value.constant !== undefined && typeof value.constant !== 'boolean') fail('INVALID_DATA', 'Worldbook constant must be a boolean');
-      return {
-        id: String(value.uid ?? key), title: value.comment ?? '', content: value.content ?? '',
-        keywords: [...strings(value.key ?? [], 'Worldbook keys'), ...strings(value.keysecondary ?? [], 'Worldbook secondary keys')],
-        tags: [], notes: '', readOnly: false, mode: value.disable ? 'disabled' : value.constant ? 'required' : 'auto', version: 1,
-      };
-    });
-  } else fail('INVALID_DATA', 'Source must contain entries');
-  const database = validateDatabase({ id: randomUUID(), name: name ?? parsed.name ?? 'Imported database', version: 1, entries });
-  const source = { id: randomUUID(), rawText, sha256: createHash('sha256').update(rawText, 'utf8').digest('hex'), format, provenance: structuredClone(parsed) };
-  return { database, source, diagnostics: [] };
+  const imported=parseWorldbook(parsed,fail);
+  if(!imported&&!Array.isArray(parsed.entries))fail('INVALID_DATA','Source must contain database or SillyTavern worldbook entries');
+  const entries=imported?.entries??parsed.entries,format=imported?.format??'rp-database',diagnostics=imported?.diagnostics??[];
+  const database = validateDatabase({ id: randomUUID(), name: name ?? imported?.name ?? parsed.name ?? 'Imported database', version: 1, entries });
+  const importReport={format,entryCount:entries.length,entryRefs:imported?.entryRefs??entries.map((entry,index)=>({id:entry.id,path:`entries.${index}`,index})),diagnostics:structuredClone(diagnostics)};
+  const source = { id: randomUUID(), rawText, sha256: createHash('sha256').update(rawText, 'utf8').digest('hex'), format, provenance: structuredClone(parsed),importReport };
+  return { database, source, diagnostics };
 }
 
 export function applyOperations(entries, operations) {

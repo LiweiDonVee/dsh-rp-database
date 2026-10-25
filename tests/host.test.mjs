@@ -59,6 +59,16 @@ test('host source changes invalidate open database views and unload releases the
   }finally{await service?.close();await rm(directory,{recursive:true,force:true})}
 })
 
+test('owner database loads retain the source import report for later review',async()=>{
+  const{createDatabaseHost}=await import('../src/host.mjs'),directory=await mkdtemp(join(tmpdir(),'rp-db-import-report-')),f=fixture();let service
+  try{
+    service=await createDatabaseHost(f.ctx,{directory})
+    const imported=await service.import({rawText:JSON.stringify({entries:{1:{uid:1,content:'{{char}} 的正文',key:['灯塔'],probability:35}}}),expectedRevision:0})
+    const loaded=await service.database({databaseId:imported.databaseId})
+    assert.ok(loaded.importReport.diagnostics.some(item=>item.code==='ST_PROBABILITY'))
+  }finally{await service?.close();await rm(directory,{recursive:true,force:true})}
+})
+
 test('bound native database reads are scoped, locked and disabled entries cannot be bypassed, source remains exact',async()=>{
   const module=await import('../src/host.mjs').catch(()=>({}))
   assert.equal(typeof module.createDatabaseHost,'function','native database host is required')
