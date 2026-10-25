@@ -1,5 +1,19 @@
 # 数据库、主动上下文与最后一步组合验收
 
+## 0.2.0 DB-B 资料、索引与传输检查点
+
+2026-10-25，DB-A accepted BASE `593146e` 后实现。`pnpm check` 为 **96 runtime +22 UI**，lint/build 通过；内容包保留精确 source audit、为库/文档创建新 ID，SavedStory provider 保留 exact IDs/因果记录、按 T2/T9 核验目标真实 canonical 来源后原子写入。TXT/MD 中文 UTF-8、两页真实文本 PDF、栅格无文本 PDF、策略/维度切换和 T9 错误优先级均有回归。PDF 解析器固定 pdf2json4.1.0 并打入 host bundle，无外置 CLI/OCR，Apache 通知/许可证随包。
+
+最终包 SHA256 `e177c7893aff9de6e800071a5c42c8f68e91679132c03aaf48b69c07603e1d6d`，0.2.0 / DSH `>=0.2.1-rc.3 <0.3.0-0`。`pnpm smoke` 在实际官方 **rc.3** 上18项通过、pageErrors=[]；`pnpm smoke:documents` 的15项双临时 home 原生断言通过、pageErrors=[]，证据 `.runtime/documents-transfer-evidence/acceptance.json`。
+
+真实本地 HTTP embedding 输入长度 **[1,2,1,1,2,1]**：源端首查 query1+缺失正文2，复查 query1；目标恢复时 cache 不随包导入，重建 query1+正文2；目标进程重启后仅 query1。disabled 哨兵未到 embedding/rerank。单位测试另证有效正文只变1项时仅补1项，外来提取/分块策略、模型与维度不会误命中混用；cache 写不推进 contentRevision。
+
+源端真实 normal native 模型调用3次、事实工具1次；目标公共 Session persistence 精确导入/cold观察、Database restore、resume、分叉和进程重启后，历史模型/事实工具计数都为 **0/0**。导入原始事件前缀分别23与3项，原 seq/message/source/tool metadata 严格相等；源回执能在新 home 取回。子分支在继承后的 protected prefix seq2 再分叉时，较晚 gm.facts 与 receipt 均未复活。
+
+**T10 唯一宿主兼容规则**：rc.3 冷读/重启把 header.delegationDepth 缺省/undefined 补为 number0，仅比较时视为等价。null、'0'、非零和其他 header 差异不放宽；原始观测/export数据不改写。规范事件前缀未改，合法 no-prompt resume 仅追加已验证的 session/end-seed；原始/目标对照保存在 `cold-prefix-comparison.json`。使用 Chromium1217 显式路径，真实用户 `.dsh` 未修改。
+
+这只证明 Database 独立 provider 与公共宿主机制。未安装实际 StoryKit/GM/Context/LastStep/Loop 全栈，不声称整包恢复、真实模型质量或大库性能已验；完整协调仍由 StoryKit/root 集成验收。以下 DB-A/旧版本记录保留为历史。
+
 ## 0.2.0 DB-A 基础检查点
 
 ### 审查修复轮 1 — 2026-10-25

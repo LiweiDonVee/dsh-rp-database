@@ -9,11 +9,14 @@ import {registerDatabaseTools} from './agent.mjs'
 import {createDatabaseRoutes} from './routes.mjs'
 import {applyScopedOperations,entryKey,entryRef,parseEntryKey,plannerOperations,selectScopedEntries} from './references.mjs'
 import {activeFactSource,factCommit} from './facts.mjs'
+import {extractText} from './documents.mjs'
+import {createVectorIndex} from './index-store.mjs'
+import {restoreEnvelope,restoreTransport,sessionIds,validateCanonicalState} from './state-transfer.mjs'
 
 export const name='rp-database'
 export const inject=['connection','typertGateway','agents','tools','systemPrompt']
 const meta=entry=>Object.fromEntries(['id','title','keywords','tags','notes','readOnly','mode','version'].map(key=>[key,entry[key]]))
-const metaV2=entry=>({...meta(entry),ref:entry.ref,...entry.sourceVersion===undefined?{}:{sourceVersion:entry.sourceVersion}})
+const metaV2=entry=>({...meta(entry),ref:entry.ref,...entry.sourceVersion===undefined?{}:{sourceVersion:entry.sourceVersion},...entry.provenance?{provenance:entry.provenance}:{}})
 function owner(input){if(Object.hasOwn(input,'agent'))throw new DatabaseError('OWNER_REQUIRED','Only the owner may bind or initialize a story',403)}
 function enabled(value){
   const entries=value.entries.filter(entry=>entry.mode!=='disabled'),allowed=new Set(entries.map(entry=>entryKey(entry.ref)))
@@ -24,7 +27,8 @@ function enabled(value){
 export async function createDatabaseHost(ctx,options={}){
   const store=options.store??createDatabaseStore({directory:options.directory??join(process.env.DSH_HOME??join(homedir(),'.dsh'),'app-data','rp-database')})
   const configured=createHttpRetrieval({embedding:options.embedding,reranking:options.reranking,fetch:options.fetch})
-  const retriever=options.retriever??createRetriever({...configured,...options.providers})
+  const index=createVectorIndex({store,embed:options.providers?.embed??configured.embed,config:options.embedding,onChange:()=>changed()})
+  const retriever=options.retriever??createRetriever({...configured,...options.providers,...index.embedEntries?{embedEntries:index.embedEntries}:{}})
   const readOwner=createOwnerReader(ctx),bindings=new Map(),subscribers=new Map(),operations=new Set(),forking=new Map()
   let stopped=false,adapter,unsubscribeSource,inheritance=Promise.resolve()
   async function sync(){bindings.clear();for(const item of await store.bindingsV2())bindings.set(item.sessionId,item);adapter?.sync()}
@@ -87,6 +91,31 @@ export async function createDatabaseHost(ctx,options={}){
   }
   const service={
     apiVersion:2,
+    contentRevision:(input={})=>run(input.signal,()=>store.contentRevision()),
+    exportContent:input=>run(input.signal,()=>{owner(input);return store.exportContent(input)}),
+    importContent:input=>run(input.signal,async()=>{owner(input);const result=await store.importContent(input);await sync();changed();return result}),
+    importDocument:input=>run(input.signal,async signal=>{owner(input);const extracted=await extractText({...input,signal}),result=await store.importDocument(input,extracted);await sync();changed();return result}),
+    document:input=>run(input.signal,()=>{owner(input);return store.document(input)}),
+    indexState:(input={})=>run(input.signal,signal=>{owner(input);return index.state(signal)}),
+    rebuildIndex:(input={})=>run(input.signal,signal=>{owner(input);return index.rebuild({...input,signal})}),
+    exportState:input=>run(input.signal,async signal=>{
+      owner(input);const ids=sessionIds(input.sessionIds),views=new Map()
+      for(const id of ids){const view=await readOwner(id,signal);await ensure(view);views.set(id,view)}
+      const exported=restoreEnvelope(await store.exportState({sessionIds:ids}),ids);validateCanonicalState(exported,views);return exported
+    }),
+    preflightRestore:input=>run(input.signal,()=>{owner(input);return store.preflightRestore(input)}),
+    restoreState:(input={})=>run(input.signal,async signal=>{
+      owner(input)
+      const ids=restoreTransport(input),request={...input,sessionIds:ids},replayed=await store.restoreReplay(request)
+      if(replayed)return replayed
+      restoreEnvelope(input.state,ids)
+      const preflight=await store.preflightRestore(request)
+      if(!preflight.supported)throw new DatabaseError(preflight.conflicts[0]?.code??'RESTORE_PAYLOAD_INVALID','Database restore preflight failed',409)
+      if((await store.contentRevision()).revision!==input.expectedRevision)throw new DatabaseError('REVISION_CONFLICT','Database state changed; reload before restoring',409)
+      const views=new Map()
+      for(const id of ids){try{views.set(id,await readOwner(id,signal))}catch(error){if(error.code==='FORBIDDEN')throw error;throw new DatabaseError('RESTORE_REQUIREMENT_MISSING','Import and cold-validate the exact destination canonical Sessions before Database restore',409)}}
+      const result=await store.restoreState(request,views);await sync();changed();return result
+    }),
     hasBinding:id=>!stopped&&bindings.has(id),
     ensureAgent:agent=>run(undefined,async()=>ensure(liveView(agent))),
     async state(input={}){return run(input.signal,async signal=>{
@@ -95,7 +124,7 @@ export async function createDatabaseHost(ctx,options={}){
         const options={activeAnchors:view.activeAnchors,...view.currentAnchor?{currentAnchor:view.currentAnchor}:{}}
         try{binding=await store.session(view.sessionId,options)}catch(error){if(error.code!=='QUALIFIED_REFERENCE_REQUIRED')throw error;binding=await store.sessionV2(view.sessionId,options)}
       }}
-      return{...await store.snapshot(),binding,retrieval:{embedding:{configured:!!(configured.embed??options.providers?.embed),model:options.embedding?.model??null},reranking:{configured:!!(configured.rerank??options.providers?.rerank),model:options.reranking?.model??null}}}
+      return{...await store.snapshot(),binding,capabilities:{documents:true,index:true,contentTransfer:true,stateTransfer:true},retrieval:{embedding:{configured:!!(configured.embed??options.providers?.embed),model:options.embedding?.model??null},reranking:{configured:!!(configured.rerank??options.providers?.rerank),model:options.reranking?.model??null}}}
     })},
     database:input=>run(input.signal,async()=>{
       const snapshot=await store.snapshot(),database=await store.database(input.databaseId,input.version),sourceId=snapshot.databases.find(item=>item.id===database.id)?.sourceId

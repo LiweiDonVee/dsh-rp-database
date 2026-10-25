@@ -1,12 +1,14 @@
 // Local deterministic models; no paid providers, private profiles, or source imports.
 export const name='native-smoke-probe'
-export const inject=['llm','agents','tools','connection','typertGateway']
+export const inject=['llm','agents','tools','connection','typertGateway','sessionQuery','sessionPersistence','agentPresets']
 async function* textChunks(text){yield{type:'block-start',index:0,blockType:'text'};yield{type:'text-delta',index:0,text};yield{type:'block-end',index:0,block:{type:'text',text}};yield{type:'usage',usage:{inputTokens:10,outputTokens:10}};yield{type:'finish',reason:{kind:'stop'}}}
 async function* toolChunks(name,args){const id='reused-smoke-wire-id';yield{type:'block-start',index:0,blockType:'tool-call'};yield{type:'tool-call-delta',index:0,id,name,argumentsDelta:JSON.stringify(args)};yield{type:'block-end',index:0,block:{type:'tool-call',id,name,arguments:JSON.stringify(args)}};yield{type:'finish',reason:{kind:'tool-calls'}}}
 export function apply(ctx){
- const calls=[],factModes=new Set(),factEvidence=new Map()
+ const calls=[],factModes=new Set(),factEvidence=new Map(),counters={models:0,factTools:0}
  const invoke=(method,request,signal)=>ctx.typertGateway.invoke({namespace:'session',method,args:{request},peer:ctx.connection.browserPeer,signal})
+ const observed=async id=>{const view=await ctx.sessionQuery.observeSession(id);try{if(!Number.isSafeInteger(view.inheritedEventCount)||view.inheritedEventCount<0||view.inheritedEventCount>view.events.length)throw Object.assign(Error('Authoritative inheritedEventCount is unavailable'),{code:'EXPORT_SOURCE_METADATA_MISSING'});return{header:view.header,events:view.events,inheritedEventCount:view.inheritedEventCount,live:!!ctx.agents.get(id)}}finally{view[Symbol.dispose]()}}
  ctx.tools.register({name:'rp_commit_turn',description:'Synthetic Database receipt acceptance fixture only',parameters:{type:'object',properties:{},additionalProperties:false},output:{schema:{type:'object'},render:(_args,value)=>[{type:'text',text:JSON.stringify(value)}]},execute:async(_args,exec)=>{
+  counters.factTools++
   const agent=exec.agent,service=ctx.get('rpDatabase'),access=await service.factAccess({sessionId:agent.session.id,agent,signal:exec.signal})
   const events=agent.session.snapshotEvents().map(row=>row.type==='event'?row.event:row),call=events.findLast(event=>event.type==='tool/call'&&event.data?.name==='rp_commit_turn')
   const assistant=events.findLast(event=>event.type==='assistant/message'&&event.seq<call.seq&&event.data?.turn===call.data.turn&&event.data?.step===call.data.step&&event.data.message.content.some(block=>block.type==='tool-call'&&block.id===call.data.callId&&block.name==='rp_commit_turn'))
@@ -26,6 +28,7 @@ export function apply(ctx){
  listModels:async provider=>[{provider,id:'main',name:'main'}],resolveModel:async(provider,id)=>({provider,id,name:id}),
  async prepareCall(provider,id){return{model:await this.resolveModel(provider,id),stream:options=>this.stream(options)}},
  async*stream(options){
+  counters.models++
   const human=options.messages.findLastIndex(m=>m.role==='user'&&m.source?.kind==='user')
   if(human<0){yield*textChunks('Synthetic database story');return}
   const agent=ctx.agents.currentInitiator(),tail=options.messages.slice(human+1)
@@ -39,6 +42,35 @@ export function apply(ctx){
  ctx.llm.registerAdapter(['smoke-local'],adapter)
  ctx.connection.fetch.register({path:'/api/native-smoke',methods:['POST'],requestBody:'buffered',fetch:async request=>{try{
   const input=await request.json(),service=ctx.get('rpDatabase')
+  if(input.action==='counters')return Response.json(counters)
+  if(input.action==='fork')return Response.json(await invoke('fork',{sessionId:input.sessionId,...input.atSeq===undefined?{}:{atSeq:input.atSeq}},request.signal))
+  if(input.action==='snapshotBundle'){
+   for(const id of input.sessionIds)await ctx.agents.get(id)?.whenIdle()
+   await ctx.sessionPersistence.flush()
+   const sessions=[];for(const id of input.sessionIds)sessions.push(await observed(id))
+   return Response.json({sessions,database:await service.exportState({sessionIds:input.sessionIds,signal:request.signal}),counters})
+  }
+  if(input.action==='restoreBundle'){
+   const ids=input.bundle.sessions.map(value=>value.header.id),state=input.bundle.database,preflight=await service.preflightRestore({sessionIds:ids,state,signal:request.signal})
+   if(!preflight.supported)throw Error('Database preflight failed')
+   for(const item of input.bundle.sessions){const existing=await ctx.sessionPersistence.stat(item.header.id);if(existing)throw Object.assign(Error('Destination Session exists'),{code:'RESTORE_ID_CONFLICT'})}
+   for(const item of input.bundle.sessions){const handle=await ctx.sessionPersistence.create(item.header,{inheritedEventCount:item.inheritedEventCount});try{await handle.append(item.events);await handle.flush()}finally{await handle.close()}}
+   const cold=[];for(const id of ids)cold.push(await observed(id))
+   const result=await service.restoreState({restoreId:input.restoreId,sessionIds:ids,state,expectedRevision:(await service.contentRevision()).revision,signal:request.signal})
+   const replay=await service.restoreState({restoreId:input.restoreId,sessionIds:ids,state,expectedRevision:0,signal:request.signal})
+   return Response.json({result,replay,cold,counters})
+  }
+  if(input.action==='resumeFacts'){
+   let agent=ctx.agents.get(input.sessionId)
+   if(!agent){const handle=await ctx.agents.resume({resumeSessionId:input.sessionId,agentOptions:{provider:'smoke-local',model:'main'},setup:async agentCtx=>{await ctx.agentPresets.mount(agentCtx,'native-smoke-story')}});agent=handle.agent}
+   const access=await service.factAccess({sessionId:input.sessionId,agent,signal:request.signal});let receipt=null,receiptCode
+   if(input.receiptId)try{receipt=await access.getReceipt(input.receiptId)}catch(error){receiptCode=error.code}
+   return Response.json({snapshot:await access.snapshot(),receipt,receiptCode,counters,observed:await observed(input.sessionId)})
+  }
+  if(input.action==='contentRoundtrip'){
+   const content=await service.exportContent({databaseId:input.databaseId,version:input.version}),before=await service.contentRevision(),requestId='native-content-'+input.databaseId,result=await service.importContent({...content,requestId,expectedRevision:before.revision}),replay=await service.importContent({...content,requestId,expectedRevision:before.revision}),exported=await service.exportContent({databaseId:result.databaseId,version:1})
+   return Response.json({result,replay,sameBytes:content.documents[0].document.dataBase64===exported.documents[0].document.dataBase64,sourceSame:JSON.stringify(content.source)===JSON.stringify(exported.source),remapped:exported.database.entries[0].provenance.documentId!==content.database.entries[0].provenance.documentId})
+  }
   if(input.action==='create')return Response.json(await invoke('create',{agentPreset:'native-smoke-story'},request.signal))
   if(input.action==='run'){await invoke('prompt',{sessionId:input.sessionId,requestId:crypto.randomUUID(),mode:'queue',content:[{type:'text',text:'我关上门，查看门外脚印。'}]},request.signal);await ctx.agents.get(input.sessionId).whenIdle();return Response.json({calls})}
   const agent=ctx.agents.get(input.sessionId)
@@ -66,6 +98,6 @@ export function apply(ctx){
    }return Response.json({codes})
   }
   return Response.json({error:'Unknown fixture action'},{status:400})
- }catch(error){return Response.json({error:{message:error.message,code:error.code}},{status:500})}}})
+ }catch(error){return Response.json({error:{message:error.message,code:error.code,stack:error.stack}},{status:500})}}})
 }
 

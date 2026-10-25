@@ -81,6 +81,12 @@
 .rpdb-results ul{padding-left:18px;margin:4px 0 0;font-size:11px;color:var(--rpdb-muted)}
 .rpdb-degraded{display:flex;flex-wrap:wrap;gap:8px;color:#a77634;font-size:11px;margin-bottom:10px}
 .rpdb-story{margin:12px 0}
+.rpdb-documents{margin:18px 0;border:1px solid var(--rpdb-border);border-radius:8px;padding:14px;min-width:0}
+.rpdb-documents>.rpdb-help{margin:8px 0 12px}
+.rpdb-index{border-top:1px solid var(--rpdb-border);margin-top:14px;padding-top:12px;font-size:11px;overflow-wrap:anywhere}
+.rpdb-index button{margin-top:8px}
+.rpdb-document-preview article{border-top:1px solid var(--rpdb-border);padding:12px 0}
+.rpdb-document-preview .rpdb-hash{margin:8px 0}
 .rpdb-composition{margin:18px 0;padding:14px;border:1px solid var(--rpdb-border);border-radius:8px}
 .rpdb-source-list{list-style:none;margin:12px 0;padding:0;display:grid;gap:12px}
 .rpdb-source-list>li{padding:12px;background:var(--rpdb-panel);border:1px solid var(--rpdb-border);border-radius:6px}

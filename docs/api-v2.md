@@ -84,4 +84,4 @@ getReceipt 缺失为 RECEIPT_NOT_FOUND。inactive/rewound 来源或回执为 INA
 
 owner POST api/rp-database/request 原有动作保留，新增 bindSources、effectiveV2、catalogV2、readV2、searchV2 精确 DTO；不暴露 patchV2、初始化或阶段 facade。SSE 只发 sessionId/type 的失效元数据。主体始终由授权请求读取，隐藏/卸载释放订阅和未完成请求。
 
-当前没有文档提取、持久增量索引、content transfer 或 saved-story restore 服务；这些属于 DB-B。
+DB-B 资料、持久增量索引与 content/SavedStory provider 见 [资料与传输接口](documents-transfer.md)。这些 owner 服务不暴露为模型工具。

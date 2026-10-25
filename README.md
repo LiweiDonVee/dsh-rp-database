@@ -21,11 +21,11 @@ $dshCli = Join-Path $env:LOCALAPPDATA 'Programs/DeepSeek Harness/resources/runti
 
 ## 使用
 
-1. 导入 SillyTavern 世界书 JSON，或新建空白数据库并添加条目。原始导入文本独立保存，宏、脚本和未知扩展不执行。
+1. 导入 SillyTavern 世界书 JSON，或新建空白数据库并添加条目。也可上传 UTF-8 TXT、Markdown 或有文本层的 PDF：原始字节独立保存，按页/段生成来源片段；宏、脚本和未知扩展不执行，无文本层 PDF 明确报告 NO_TEXT_LAYER，不执行 OCR。
 2. 编辑正文、关键词、标签与叙事备注；设置 **Agent 只读** 及 **自动／必开／禁用**。
 3. 保存源版本，再在 **故事来源组合** 添加来源、指定槽位和固定版本；可调整顺序。同 ID 不覆盖彼此，顺序只影响迭代与展示。
 4. 保留相同槽位/数据库/版本可保留变化。移除或替换有变化的来源时，界面说明影响，并要求确认重置；GM 初始化后的事实与回执不能在这里丢弃，需另开故事。来源草稿和源条目草稿分别保留自己的 revision，冲突不会自动重放。
-5. Agent 用目录、读取、搜索和补丁工具维护当前故事。目录返回程序生成的 entryKey；按 key 读取、修改具体来源。新条目进入当前故事的 @session 槽位。界面显示来源与条目 ID，可查看有效内容、变更与临时备注。
+5. Agent 用目录、读取、搜索和补丁工具维护当前故事。目录返回程序生成的 entryKey；按 key 读取、修改具体来源。新条目进入当前故事的 @session 槽位。界面显示来源、条目 ID 与资料原始页/段，可查看有效内容、变更与临时备注；编辑提取条目不会改写原始文件或提取文本。
 
 旧 **应用到当前故事** 是替换为单一来源的兼容操作；已有绑定时先确认重置影响。模型没有重新绑定、重置、人类策略或事实所有权参数。
 
@@ -62,6 +62,8 @@ $dshCli = Join-Path $env:LOCALAPPDATA 'Programs/DeepSeek Harness/resources/runti
 
 将示例 URL/model 改成自己实际服务，通过 DSH 插件配置应用。远程服务可增加 apiKey，密钥不进入模型选材结果或浏览器状态。两个接口分别为 `/embeddings` 与 `/rerank`，不是聊天补全接口。未配置或失败时明确标记降级，不伪装成已经完成语义检索；模型不会自行指定外发地址。
 
+已配置的 embedding 向量按有效内容哈希、提取/分块策略、明确提供方/模型和维度持久缓存；重复查询只生成查询向量，未变正文复用，内容变化只重算对应项。切换模型/维度不混用旧向量。缓存更新不改变世界 contentRevision，不会让正常选材提交产生虚假 revision 冲突；界面可看索引状态和重建。禁用及失效分支在提供方请求之前过滤。
+
 检索产生候选而不替 GM 决定。配合 [RP Context](https://github.com/LiweiDonVee/dsh-rp-context)，中间模型能重新搜索整个启用库、读原候选之外的条目、修改允许的会话资料并排序选材。配合 [RP 最后一步](https://github.com/LiweiDonVee/dsh-rp-last-step)，正式正文消费冻结快照。
 
 ## 工具与服务
@@ -69,6 +71,8 @@ $dshCli = Join-Path $env:LOCALAPPDATA 'Programs/DeepSeek Harness/resources/runti
 绑定会话获得 `rp_db_catalog`、`rp_db_read`、`rp_db_search`、`rp_db_patch`，工具只处理实际调用 Agent 的会话。工具保持 entryIds/operations[].id 字段，值使用目录给出的 entryKey；旧单来源 legacy 槽位可继续使用无歧义裸 ID。修改要求当前 revision；一个批次全部通过才提交。来源数据库 ID 和版本不由模型改动。
 
 可选服务 `ctx.get('rpDatabase')` 的 apiVersion 为 2，新增 bindSources、effectiveV2/catalogV2/readV2/searchV2/patchV2、initializeStoryState、factAccess 和 materialAccess。typed v2 使用 `{sourceKey,entryId}`，材料 facade.version 为 2，planner 使用 entryKey。旧单来源服务保留，多来源调用须显式使用资格引用。[精确 API、事实回执和合成示例](docs/api-v2.md)。
+
+资料 API 提供 importDocument/document/indexState/rebuildIndex。内容包 provider 提供 contentRevision/exportContent/importContent，创建新库与文档 ID、返回幂等 mapping，保留原件审计。SavedStory provider 提供 exportState/preflightRestore/restoreState：保留精确 ID、固定版本、因果覆盖和回执；预检不要求目标 Session 已存在，实际恢复必须在宿主导入并冷验证日志后核验真实引用。既有无关内容不覆盖，向量 cache 不进传输包。完整故事保存/恢复由 StoryKit 协调，Database 单独恢复自己的状态不等于整包恢复。[资料与传输接口](docs/documents-transfer.md)。
 
 ## 数据与开发
 
@@ -82,6 +86,6 @@ pnpm check
 pnpm package
 ```
 
-产物与 SHA256SUMS 在 artifacts。`pnpm smoke` 单独安装本包到隔离 home，使用当前官方宿主、确定性本地模型和合成事实工具验证原生调用、阶段保护、回执与界面；不代表 GM/Context/Last Step 完整组合或真实推理质量。本文 0.2.0 是 Database 基础检查点；TXT/MD/PDF 与持久增量索引尚未实现。MIT 许可证。
+产物与 SHA256SUMS 在 artifacts。`pnpm smoke` 单独安装本包到隔离 home 验证原生事实/来源/界面回归；`pnpm smoke:documents` 使用两个独立临时 home 验证真实 PDF、HTTP 增量计数、公共 Session persistence 的冷恢复和索引进程重启。测试使用确定性本地模型与合成资料，不代表 GM/Context/Last Step 完整组合或真实推理质量。MIT 许可证；包内 pdf2json 4.1.0 为 Apache-2.0，通知与许可证在 third-party。
 
 [架构说明](docs/architecture.md) · [验收记录](docs/acceptance.md) · [更新记录](CHANGELOG.md)

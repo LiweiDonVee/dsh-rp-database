@@ -4,6 +4,10 @@ import { join, resolve } from 'node:path';
 import { DatabaseError, importDatabase, validateDatabase } from './core.mjs';
 import {applyScopedOperations,entryKey,legacySnapshot,sourceBindings} from './references.mjs';
 import {factCommit,fingerprint,storySeed,validateFactState} from './facts.mjs';
+import {contentPayload,publicSource} from './transfer.mjs';
+import {documentContent,validateChunkReferences} from './document-types.mjs';
+import {CHUNKING_VERSION,EXTRACTION_VERSION,chunkPages,textHash} from './documents.mjs';
+import {exportDatabaseState,restoreEnvelope,restoreConflicts,restoreTransport,sessionIds,validateCanonicalState} from './state-transfer.mjs';
 
 // One writer queue per absolute directory, shared by every handle in this process.
 const queues = new Map();
@@ -141,7 +145,109 @@ export function createDatabaseStore({ directory }) {
     const active=anchorSet(activeAnchors);
     return !active || active.has(item.receipt.source.assistantMessageId);
   }
+  function pinnedDocument(state,id,version) {
+    const versions=state.documents?.[hash(identifier(id,'Document ID'))]?.versions;
+    const found=version===undefined?versions?.at(-1):versions?.find(value=>value.document.version===version);
+    if(!found)error('DOCUMENT_NOT_FOUND','Document version is unavailable',404);
+    return found;
+  }
+  function referencedDocuments(state,database,extra=[]) {
+    const refs=new Map(extra.map(ref=>[JSON.stringify([ref.documentId,ref.version]),ref]));
+    for(const entry of database.entries)if(entry.provenance){const p=entry.provenance,ref={documentId:p.documentId,version:p.documentVersion};refs.set(JSON.stringify([ref.documentId,ref.version]),ref);}
+    const documents=[...refs.values()].map(ref=>{const value=pinnedDocument(state,ref.documentId,ref.version);return{document:value.document,extraction:value.extraction};});
+    validateChunkReferences(database.entries,documents);return documents;
+  }
   return {
+    exportState(input) {return read(state=>exportDatabaseState(state,sessionIds(input.sessionIds)));},
+    preflightRestore(input) {
+      return read(state=>{
+        try{
+          const ids=sessionIds(input.sessionIds),restored=restoreEnvelope(input.state,ids),digest=fingerprint({sessionIds:[...ids].sort(),state:input.state}),owned=Object.values(state.restoreJobs??{}).some(job=>job.fingerprint===digest);
+          const conflicts=restoreConflicts(state,restored,ids,{allowOwned:owned});return{supported:conflicts.length===0,conflicts,requirements:[]};
+        }catch(error){return{supported:false,conflicts:[{code:error.code?.startsWith('RESTORE_')?error.code:'RESTORE_PAYLOAD_INVALID',id:'payload'}],requirements:error.code==='RESTORE_REQUIREMENT_MISSING'?[error.message]:[]};}
+      });
+    },
+    async restoreReplay(input) {
+      restoreTransport(input);
+      return read(state=>{const previous=state.restoreJobs?.[hash(input.restoreId)];if(!previous)return null;const digest=fingerprint({sessionIds:[...input.sessionIds].sort(),state:input.state});if(previous.fingerprint!==digest)error('RESTORE_ID_CONFLICT','This restore ID already owns different state or sessions',409);return previous.result;});
+    },
+    async restoreState(input,views) {
+      const ids=restoreTransport(input),restored=restoreEnvelope(input.state,ids),digest=fingerprint({sessionIds:[...ids].sort(),state:input.state}),restoreKey=hash(input.restoreId);
+      return mutate(input.expectedRevision,state=>{
+        const conflicts=restoreConflicts(state,restored,ids);if(conflicts.length)error(conflicts[0].code,'Destination identity or content conflicts with this restore',409);
+        validateCanonicalState(restored,views);
+        for(const source of restored.payload.sources)state.sources[hash(source.id)]??=source;
+        for(const record of restored.payload.databases){const current=state.databases[hash(record.id)]??={versions:[]};for(const item of record.versions)if(!current.versions.some(value=>value.database.version===item.database.version))current.versions.push(item);current.versions.sort((a,b)=>a.database.version-b.database.version);}
+        for(const record of restored.payload.documents){const current=(state.documents??={})[hash(record.id)]??={versions:[]};for(const item of record.versions)if(!current.versions.some(value=>value.document.version===item.document.version))current.versions.push(item);current.versions.sort((a,b)=>a.document.version-b.document.version);}
+        for(const record of restored.payload.sessions)state.sessions[hash(record.id)]=record;
+        const result={revision:state.revision+1,restoredSessionIds:ids};(state.restoreJobs??={})[restoreKey]={fingerprint:digest,result};return result;
+      },state=>{const previous=state.restoreJobs?.[restoreKey];if(!previous)return undefined;if(previous.fingerprint!==digest)error('RESTORE_ID_CONFLICT','This restore ID already owns different state or sessions',409);return previous.result;});
+    },
+    indexEntries(databaseIds) {
+      return read(state=>{
+        if(databaseIds!==undefined&&(!Array.isArray(databaseIds)||databaseIds.some(id=>typeof id!=='string'||!id.trim())))error('INVALID_DATA','databaseIds must be an array of IDs');
+        const records=databaseIds===undefined?Object.values(state.databases):[...new Set(databaseIds)].map(id=>{const record=state.databases[hash(id)];if(!record)error('NOT_FOUND','Database not found',404);return record;});
+        return records.flatMap(record=>record.versions.at(-1).database.entries).filter(entry=>entry.mode!=='disabled');
+      });
+    },
+    cacheRead(identity,dimension,hashes=[]) {
+      return read(state=>{const provider=state.vectorIndex?.schemaVersion===1?state.vectorIndex.providers?.[fingerprint(identity)]:undefined,d=dimension??provider?.dimension,rows=provider?.dimensions?.[d]??{};return{dimension:d,vectors:Object.fromEntries(hashes.filter(key=>rows[key]).map(key=>[key,rows[key]])),...provider?.lastErrorCode?{lastErrorCode:provider.lastErrorCode}:{}};});
+    },
+    cacheWrite(identity,dimension,rows,errorCode) {
+      return serial(async()=>{
+        const state=await readState();
+        if(state.vectorIndex?.schemaVersion!==1)state.vectorIndex={schemaVersion:1,providers:{}};
+        const provider=state.vectorIndex.providers[fingerprint(identity)]??={identity,dimensions:{}};
+        if(errorCode)provider.lastErrorCode=errorCode;
+        else{provider.dimension=dimension;delete provider.lastErrorCode;const values=provider.dimensions[dimension]??={};for(const row of rows)values[row.hash]=row.vector;}
+        await writeState(state);
+      });
+    },
+    contentRevision() {return read(state=>({revision:state.revision}));},
+    exportContent({databaseId,version}) {
+      return read(state=>{const pinned=sourceVersion(state,databaseId,version),source=pinned.sourceId?state.sources[hash(pinned.sourceId)]:undefined,documents=referencedDocuments(state,pinned.database,pinned.documentRefs);return{database:pinned.database,...source?{source:publicSource(source)}:{},...documents.length?{documents}:{}};});
+    },
+    async importContent(input) {
+      identifier(input.requestId,'Request ID');
+      const payload=contentPayload(input),digest=fingerprint({method:'importContent',...payload}),requestKey=hash(input.requestId);
+      return mutate(input.expectedRevision,state=>{
+        const database={...payload.database,id:randomUUID(),version:1},documentMappings={},documentRefs=[];let sourceId;
+        if(payload.source){
+          sourceId=randomUUID();const source={...payload.source,id:sourceId};
+          if(source.rawText!==undefined){
+            try{source.importReport=importDatabase(source.rawText).source.importReport;}catch{/* Foreign inert provenance need not be a current JSON importer format. */}
+          }
+          state.sources[hash(sourceId)]=source;
+        }
+        for(const value of payload.documents??[]){
+          const id=randomUUID(),document={...value.document,id,version:1,databaseId:database.id},extraction={text:value.extraction.text,chunks:value.extraction.chunks.map(chunk=>({...chunk,ref:{...chunk.ref,documentId:id,documentVersion:1}}))};
+          documentMappings[JSON.stringify([value.document.id,value.document.version])]={documentId:id,version:1};documentRefs.push({documentId:id,version:1});
+          (state.documents??={})[hash(id)]={versions:[{document,extraction,diagnostics:[]}]};
+        }
+        database.entries=database.entries.map(entry=>{if(!entry.provenance)return entry;const p=entry.provenance,mapping=documentMappings[JSON.stringify([p.documentId,p.documentVersion])];return{...entry,provenance:{...p,documentId:mapping.documentId,documentVersion:mapping.version}};});
+        referencedDocuments(state,database,documentRefs);
+        state.databases[hash(database.id)]={versions:[{database,...sourceId?{sourceId}:{},...documentRefs.length?{documentRefs}:{}}]};
+        const result={revision:state.revision+1,databaseId:database.id,version:1,...sourceId?{sourceId}:{},...documentRefs.length?{documentMappings}:{}};
+        (state.importRequests??={})[requestKey]={fingerprint:digest,result};return result;
+      },state=>{const existing=state.importRequests?.[requestKey];if(!existing)return undefined;if(existing.fingerprint!==digest)error('REQUEST_ID_CONFLICT','This request ID already owns different content',409);return existing.result;});
+    },
+    async importDocument(input,extracted) {
+      identifier(input.name,'Document name');identifier(input.requestId,'Request ID');
+      const dataBase64=extracted.bytes.toString('base64'),digest=fingerprint({method:'importDocument',name:input.name,mimeType:input.mimeType,dataBase64}),requestKey=hash(input.requestId);
+      return mutate(input.expectedRevision,state=>{
+        const id=randomUUID(),databaseId=randomUUID(),sourceId=randomUUID(),chunks=chunkPages(extracted.pages);
+        const document={id,version:1,name:input.name,mimeType:input.mimeType,sha256:textHash(extracted.bytes),dataBase64,databaseId,extractionVersion:EXTRACTION_VERSION,chunkingVersion:CHUNKING_VERSION};
+        const extraction={text:extracted.pages.map(page=>page.text).join('\n\n'),chunks:chunks.map(({chunkId,page,paragraph,text,sha256})=>({ref:{documentId:id,documentVersion:1,chunkId,...page===undefined?{}:{page},paragraph},text,sha256}))};
+        documentContent({document,extraction});
+        const database=validateDatabase({id:databaseId,name:input.name,version:1,entries:extraction.chunks.map(chunk=>({id:chunk.ref.chunkId,title:`${input.name} · ${chunk.ref.page?`第${chunk.ref.page}页`: `段落${chunk.ref.paragraph}`}`,content:chunk.text,provenance:{...chunk.ref,kind:'document-chunk',extractionVersion:EXTRACTION_VERSION,chunkingVersion:CHUNKING_VERSION,textSha256:chunk.sha256}}))});
+        (state.documents??={})[hash(id)]={versions:[{document,extraction,diagnostics:extracted.diagnostics}]};
+        state.sources[hash(sourceId)]={id:sourceId,format:'document',dataBase64,sha256:document.sha256,provenance:{name:input.name,mimeType:input.mimeType},importReport:{format:'document',entryCount:chunks.length,diagnostics:extracted.diagnostics}};
+        state.databases[hash(databaseId)]={versions:[{database,sourceId,documentRefs:[{documentId:id,version:1}]}]};
+        const result={revision:state.revision+1,documentId:id,version:1,databaseId,sourceKeySuggestion:`document-${id.slice(0,8)}`,diagnostics:extracted.diagnostics,chunkCount:chunks.length};
+        (state.importRequests??={})[requestKey]={fingerprint:digest,result};return result;
+      },state=>{const existing=state.importRequests?.[requestKey];if(!existing)return undefined;if(existing.fingerprint!==digest)error('REQUEST_ID_CONFLICT','This request ID already owns different content',409);return existing.result;});
+    },
+    document({documentId,version}) {return read(state=>{const value=pinnedDocument(state,documentId,version);return{document:value.document,extraction:value.extraction,diagnostics:value.diagnostics};});},
     bindings() {
       return read(state => Object.values(state.sessions).map(record => ({sessionId:record.id,databaseId:record.binding.sources[0]?.databaseId,version:record.binding.sources[0]?.version})));
     },
@@ -149,7 +255,7 @@ export function createDatabaseStore({ directory }) {
     snapshot() {
       return read(state => ({ revision: state.revision, databases: Object.values(state.databases).map(record => {
         const latest = record.versions.at(-1);
-        return { id: latest.database.id, name: latest.database.name, version: latest.database.version, entryCount: latest.database.entries.length, sourceId: latest.sourceId };
+        return { id: latest.database.id, name: latest.database.name, version: latest.database.version, entryCount: latest.database.entries.length, sourceId: latest.sourceId,...latest.documentRefs?{documentRefs:latest.documentRefs}:{} };
       }) }));
     },
     database(id, version) { return read(state => sourceVersion(state, id, version).database); },
@@ -163,6 +269,7 @@ export function createDatabaseStore({ directory }) {
     importSource(rawText, { name, expectedRevision } = {}) {
       return mutate(expectedRevision, state => {
         const { database, source, diagnostics } = importDatabase(rawText, { name });
+        referencedDocuments(state,database);
         state.databases[hash(database.id)] = { versions: [{ database, sourceId: source.id }] };
         state.sources[hash(source.id)] = source;
         return { databaseId: database.id, version: database.version, sourceId: source.id, diagnostics };
@@ -171,6 +278,7 @@ export function createDatabaseStore({ directory }) {
     saveDatabase(value, { expectedRevision } = {}) {
       return mutate(expectedRevision, state => {
         const database = validateDatabase(value);
+        referencedDocuments(state,database);
         const record = state.databases[hash(database.id)];
         let sourceId;
         if (record) {
@@ -185,7 +293,7 @@ export function createDatabaseStore({ directory }) {
             return { ...entry, version: old.version + Number(changed) };
           });
           database.version++;
-          record.versions.push({ database, sourceId });
+          record.versions.push({ database, sourceId,...latest.documentRefs?{documentRefs:latest.documentRefs}:{} });
         } else {
           if (database.version !== 1) error('VERSION_CONFLICT', 'A new database must start at version 1', 409);
           state.databases[hash(database.id)] = { versions: [{ database }] };

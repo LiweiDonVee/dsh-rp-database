@@ -12,6 +12,10 @@ export function createRpDatabaseApi(send = (...args) => globalThis.fetch(...args
     return data
   }
   return {
+    importDocument: (input,signal) => request('importDocument',input,signal),
+    document: (documentId,version,signal) => request('document',{documentId,...version===undefined?{}:{version}},signal),
+    indexState: signal => request('indexState',{},signal),
+    rebuildIndex: (input,signal) => request('rebuildIndex',input??{},signal),
     state: (sessionId, signal) => request('state', sessionId ? {sessionId} : {}, signal),
     database: (databaseId, version, signal) => request('database', {databaseId, ...(version === undefined ? {} : {version})}, signal),
     source: (sourceId, signal) => request('source', {sourceId}, signal),

@@ -10,7 +10,7 @@ Agent 可 update 内容/索引/备注，add 自动且未锁的新条目，remove
 
 注册 factEntryRefs 后，generic/material 的任何修改（包括 note）均返回 FACT_OWNER_REQUIRED，整个批次不提交。factAccess 仍受 readOnly、disabled、required 约束。gm.scene/gm.facts 为 schemaVersion 1 JSON；Database 校验结构，不判断 GM 任意叙述是否为真。factAccess/materialAccess 和 agent effectiveV2 快照只给启用正文；owner 可查看禁用资料。
 
-关键词检索包括标题、ID、标签、正文和中文词项。配置向量服务后计算余弦相似度并与关键词排名融合，再调用配置的重排服务。禁用项在构造提供方请求前就排除。必开 ID 单独返回，不受 Top-K 截断影响。向量当前按检索时的有效条目计算，没有宣称持久向量索引或大库性能已验证。
+关键词检索包括标题、ID、标签、正文和中文词项。配置向量服务后计算余弦相似度并与关键词排名融合，再调用配置的重排服务。禁用项在构造提供方请求前就排除。必开 ID 单独返回，不受 Top-K 截断影响。向量按实际有效内容文本、提取/分块/检索策略、明确提供方/模型与维度持久缓存；查询向量每次生成，未变正文复用。重排只走配置的服务，没有推断地址；不宣称大库性能或真实语义质量已验证。
 
 ## 因果来源与回退
 
@@ -31,3 +31,7 @@ rpDatabase.apiVersion=2；精确服务见 [API](api-v2.md)。旧单来源 effect
 浏览器 POST api/rp-database/request 只接受精确动作和字段，GET api/rp-database/events 发送元数据失效通知。宿主来源变化、回退和新步骤会使打开的视图重新读取有效状态；隐藏、断线和卸载释放订阅。没有任意 URL/RPC 代理。
 
 持久化为 schemaVersion 2 的单个 state.json，通过同一进程内的目录写队列与原子 rename 更新。v1 原子向前迁移保留 baseline 与原有 anchor，并将其条目和历史新增限定在 legacy；新 v2 新增使用 @session。initializeStoryState 按 launchId/seed 幂等追加新 @session seed，不覆盖已有故事条目。revision 冲突保留源编辑和来源组合各自草稿，不静默重放。跨进程共同编辑同一个 DSH home 不属于当前写入约定。
+
+文档原始字节和 Document/Extraction 是不可变记录；Entry.provenance 保存来源 ChunkRef 及原始文本哈希，不可由模型编辑。有效正文变化保持原始 provenance，同时用有效文本哈希重算向量。向量派生表使用同一队列原子合并最新文件，不推进 contentRevision；传输排除缓存与时间戳。
+
+内容 pack 生成新库/文档 ID 并重映 refs，原 SourcePayload/provenance 作为审计保持不变。SavedStory 的 Database payload 保留精确 ID 与因果记录，包含仅所需 source/version/document dependencies。restore 的结构/冲突预检与实际 canonical 来源校验分开；只有公共宿主日志已冷导入可读时才写入本插件状态，写入一次 revision 并持久 restoreId journal。没有写其他插件或直接复制 Session 私有文件。

@@ -2,7 +2,8 @@ import {DatabaseError} from './core.mjs'
 import {entryRef,sourceBindings} from './references.mjs'
 
 const fields={state:['sessionId'],database:['databaseId','version'],source:['sourceId'],create:['name','expectedRevision'],import:['rawText','name','expectedRevision'],save:['database','expectedRevision'],bind:['sessionId','databaseId','version','expectedRevision'],search:['sessionId','query','limit'],bindSources:['sessionId','sources','expectedRevision','resetOverlay'],effectiveV2:['sessionId'],catalogV2:['sessionId'],readV2:['sessionId','refs'],searchV2:['sessionId','query','limit']}
-const writes=new Set(['create','import','save','bind','bindSources'])
+Object.assign(fields,{importDocument:['name','mimeType','dataBase64','text','requestId','expectedRevision'],document:['documentId','version'],indexState:[],rebuildIndex:['databaseIds'],contentRevision:[]})
+const writes=new Set(['create','import','save','bind','bindSources','importDocument'])
 const id=value=>typeof value==='string'&&value.trim().length>0&&value.length<=256
 const object=value=>value!==null&&typeof value==='object'&&!Array.isArray(value)
 const failure=(status,code,message,receiptId)=>Response.json({error:{code,message,...code==='TURN_ALREADY_COMMITTED'&&typeof receiptId==='string'?{receiptId}:{}}},{status,headers:{'cache-control':'no-store'}})
@@ -27,6 +28,12 @@ function valid(input){
     if(!Array.isArray(input.refs))return false
     try{if(input.refs.map(entryRef).some(ref=>!id(ref.sourceKey)||!id(ref.entryId)))return false}catch{return false}
   }
+  if(input.action==='importDocument'){
+    if(!id(input.name)||!id(input.requestId)||!['text/plain','text/markdown','application/pdf'].includes(input.mimeType)||(input.text===undefined)===(input.dataBase64===undefined)||input.mimeType==='application/pdf'&&input.text!==undefined)return false
+    if(input.text!==undefined&&(typeof input.text!=='string'||input.text.length>8_000_000)||input.dataBase64!==undefined&&(typeof input.dataBase64!=='string'||input.dataBase64.length>32_000_000))return false
+  }
+  if(input.action==='document'&&!id(input.documentId))return false
+  if(input.action==='rebuildIndex'&&input.databaseIds!==undefined&&(!Array.isArray(input.databaseIds)||input.databaseIds.some(value=>!id(value))))return false
   return true
 }
 function errorResponse(error){

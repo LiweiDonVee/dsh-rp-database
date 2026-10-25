@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { parseWorldbook } from './worldbook.mjs';
+import {documentProvenance} from './document-types.mjs';
 
 export class DatabaseError extends Error {
   constructor(code, message, status = 400) {
@@ -33,6 +34,7 @@ function normalizeEntry(value) {
     tags: strings(value.tags ?? [], 'Tags'),
     notes: string(value.notes ?? '', 'Notes'),
     readOnly, mode, version,
+    ...value.provenance===undefined?{}:{provenance:documentProvenance(value.provenance)},
   };
 }
 
@@ -75,6 +77,7 @@ export function applyOperations(entries, operations) {
   for (const operation of operations) {
     if (!record(operation)) fail('INVALID_OPERATION', 'Operation must be an object');
     if (operation.op === 'add') {
+      if (operation.entry?.provenance !== undefined) fail('INVALID_OPERATION','Document provenance is not model-editable');
       const added = normalizeEntry(operation.entry);
       if (reserved.has(added.id)) fail('DUPLICATE_ID', `Entry ID is already inherited or used: ${added.id}`);
       if (added.readOnly || added.mode !== 'auto' || added.version !== 1) fail('INVALID_OPERATION', 'Agent additions must be unlocked, auto entries at version 1');

@@ -1,0 +1,95 @@
+import test from 'node:test'
+import assert from 'node:assert/strict'
+import {mkdtemp,rm} from 'node:fs/promises'
+import {join} from 'node:path'
+import {tmpdir} from 'node:os'
+import {createDatabaseHost} from '../src/host.mjs'
+import {hostFixture,stateSeeds,factRefs,turnEvents} from './fixtures/database-host.mjs'
+
+async function fixture(t,{embedding=false}={}){
+  const directory=await mkdtemp(join(tmpdir(),'rp-db-restore-')),f=hostFixture(),views=new Map(),stats={canonicalReads:0}
+  f.ctx.typertGateway.stream=async input=>({async *[Symbol.asyncIterator](){stats.canonicalReads++;const id=input.args.request.address.sessionId,value=views.get(id);if(!value)throw Error('Canonical destination missing');yield{type:'snapshot',header:value.header,cursor:100,hasMore:false,records:value.events.map(event=>({type:'event',event}))}}})
+  const service=await createDatabaseHost(f.ctx,{directory,...embedding?{embedding:{baseURL:'http://127.0.0.1:1/v1',model:'fixture',apiKey:'never-export'},providers:{embed:async texts=>texts.map(()=>[1,0])}}:{}})
+  t.after(async()=>{await service.close();await rm(directory,{recursive:true,force:true})})
+  const add=(id,parentSession)=>{const agent=id==='story'?f.agent:f.addAgent(id,parentSession);agent.session.header={id,...parentSession?{parentSession}:{}};agent.session.snapshotEvents=()=>views.get(id)?.events??[];return agent}
+  return{service,views,add,stats}
+}
+const input=(revision,start,anchor,value)=>({turnKey:JSON.stringify(['story',start]),source:{assistantMessageId:anchor,callId:'reused-call',callSeq:start+3,turnStartSeq:start},expectedRevision:revision,operations:[{op:'update',ref:factRefs[1],patch:{content:JSON.stringify({schemaVersion:1,items:[{id:value,text:value}]})}}],summary:value,packet:{playerAction:value},kind:'turn'})
+async function source(t,{note=false}={}){
+  const f=await fixture(t,{embedding:true}),A=turnEvents(),B=turnEvents({start:10,turn:2,anchor:'assistant-B'})
+  f.views.set('story',{header:{id:'story'},events:A});const agent=f.add('story')
+  const doc=await f.service.importDocument({name:'source.txt',mimeType:'text/plain',text:'Required original source',requestId:'source-doc',expectedRevision:0})
+  await f.service.bindSources({sessionId:'story',sources:[{key:'world',databaseId:doc.databaseId,version:1}],expectedRevision:1,resetOverlay:false})
+  await f.service.initializeStoryState({sessionId:'story',entries:stateSeeds(),factEntryRefs:factRefs,launchId:'launch',expectedRevision:2})
+  const access=await f.service.factAccess({sessionId:'story',agent}),first=input(3,1,'assistant-A','A')
+  if(note){const entry=(await f.service.database({databaseId:doc.databaseId})).database.entries[0];first.operations.push({op:'note',ref:{sourceKey:'world',entryId:entry.id},text:'temporary factual turn guidance'})}
+  const receiptA=await access.commit(first)
+  f.views.get('story').events=[...A,...B];await access.commit(input(4,10,'assistant-B','B'))
+  f.views.set('child',{header:{id:'child',parentSession:'story'},events:A});f.add('child','story')
+  assert.equal(typeof f.service.exportState,'function','exact-ID state seam exists')
+  const exported=await f.service.exportState({sessionIds:['story','child']})
+  await f.service.searchV2({sessionId:'story',agent,query:'source'})
+  return{...f,exported,receiptA,doc}
+}
+test('T2 preflight permits missing canonical sessions; restore then validates real refs and preserves causal state with exact IDs',async t=>{
+  const from=await source(t),to=await fixture(t)
+  assert.ok(!Object.hasOwn(from.exported.payload,'vectorIndex'));assert.ok(!JSON.stringify(from.exported).includes('never-export'))
+  const unrelated=await to.service.create({name:'Unrelated destination',expectedRevision:0})
+  const request={sessionIds:['story','child'],state:from.exported}
+  assert.deepEqual(await to.service.preflightRestore(request),{supported:true,conflicts:[],requirements:[]})
+  await assert.rejects(to.service.restoreState({...request,restoreId:'restore-A',expectedRevision:1}),{code:'RESTORE_REQUIREMENT_MISSING'})
+  assert.equal((await to.service.contentRevision()).revision,1)
+  for(const[id,value]of from.views)to.views.set(id,structuredClone(value))
+  const result=await to.service.restoreState({...request,restoreId:'restore-A',expectedRevision:1})
+  assert.deepEqual(result.restoredSessionIds,['story','child']);assert.equal(result.revision,2)
+  assert.deepEqual(await to.service.restoreState({...request,restoreId:'restore-A',expectedRevision:1}),result)
+  assert.equal((await to.service.database({databaseId:unrelated.databaseId})).database.name,'Unrelated destination')
+  assert.equal((await to.service.document({documentId:from.doc.documentId})).document.id,from.doc.documentId)
+  const parent=await to.service.factAccess({sessionId:'story',agent:to.add('story')}),child=await to.service.factAccess({sessionId:'child',agent:to.add('child','story')})
+  assert.equal(JSON.parse((await parent.snapshot()).entries.find(entry=>entry.id==='gm.facts').content).items[0].text,'B')
+  assert.equal(JSON.parse((await child.snapshot()).entries.find(entry=>entry.id==='gm.facts').content).items[0].text,'A')
+  assert.equal((await child.getReceipt(from.receiptA.id)).originSessionId,'story')
+  to.views.get('child').events.push({seq:20,type:'assistant/message',surfaceOp:{op:'replace',startSeq:3,endSeq:3},data:{turn:1,step:2,message:{id:'rewound',content:[]}}})
+  assert.deepEqual(JSON.parse((await child.snapshot()).entries.find(entry=>entry.id==='gm.facts').content).items,[])
+  await assert.rejects(child.getReceipt(from.receiptA.id),{code:'INACTIVE_SOURCE'})
+  await assert.rejects(to.service.restoreState({...request,restoreId:'restore-A',sessionIds:['story'],expectedRevision:2}),{code:'RESTORE_ID_CONFLICT'})
+  await assert.rejects(to.service.restoreState({...request,restoreId:'another-job',expectedRevision:2}),{code:'RESTORE_ID_CONFLICT'})
+  assert.equal((await to.service.contentRevision()).revision,2)
+})
+test('state restore rejects content collisions and forged native receipt sources without partial writes',async t=>{
+  const from=await source(t),to=await fixture(t),request={sessionIds:['story','child'],state:from.exported}
+  for(const[id,value]of from.views)to.views.set(id,structuredClone(value))
+  to.views.get('story').events=to.views.get('story').events.filter(event=>event.type!=='tool/call')
+  await assert.rejects(to.service.restoreState({...request,restoreId:'invalid-native',expectedRevision:0}),{code:'RESTORE_PAYLOAD_INVALID'})
+  assert.equal((await to.service.contentRevision()).revision,0);assert.equal((await to.service.state()).databases.length,0)
+  await to.service.save({database:{id:from.doc.databaseId,name:'Existing conflict',version:1,entries:[{id:'0',content:'different'}]},expectedRevision:0})
+  const preflight=await to.service.preflightRestore(request)
+  assert.equal(preflight.supported,false);assert.ok(preflight.conflicts.some(item=>item.code==='RESTORE_CONTENT_CONFLICT'))
+  assert.equal((await to.service.contentRevision()).revision,1)
+})
+test('a fork may drop temporary note operations while preserving the original factual receipt fingerprint for restore',async t=>{
+  const from=await source(t,{note:true}),to=await fixture(t)
+  for(const[id,value]of from.views)to.views.set(id,structuredClone(value))
+  await to.service.restoreState({restoreId:'fork-notes',sessionIds:['story','child'],state:from.exported,expectedRevision:0})
+  const child=await to.service.factAccess({sessionId:'child',agent:to.add('child','story')})
+  assert.equal((await child.getReceipt(from.receiptA.id)).id,from.receiptA.id);assert.deepEqual((await child.snapshot()).notes,[])
+})
+test('restore journals keep ownership of included unbound ancestor namespaces',async t=>{
+  const to=await fixture(t),state={schemaVersion:1,revision:0,payload:{storeSchemaVersion:2,databases:[],sources:[],documents:[],sessions:[]}},request={sessionIds:['empty-native'],state}
+  to.views.set('empty-native',{header:{id:'empty-native'},events:[]})
+  await to.service.restoreState({...request,restoreId:'owns-empty-ancestor',expectedRevision:0})
+  await assert.rejects(to.service.restoreState({...request,restoreId:'unrelated-job',expectedRevision:1}),{code:'RESTORE_ID_CONFLICT'})
+  assert.equal((await to.service.contentRevision()).revision,1)
+})
+test('T9 validates transport before replay and rejects reused identity before deep schema or canonical lookups',async t=>{
+  const to=await fixture(t),state={schemaVersion:1,revision:0,payload:{storeSchemaVersion:2,databases:[],sources:[],documents:[],sessions:[]}},request={restoreId:'transport-gate',sessionIds:['empty-native'],state,expectedRevision:0}
+  to.views.set('empty-native',{header:{id:'empty-native'},events:[]})
+  await to.service.restoreState(request);const before=to.stats.canonicalReads
+  await assert.rejects(to.service.restoreState({...request,expectedRevision:undefined}),{code:'RESTORE_PAYLOAD_INVALID'})
+  const nonJSON=structuredClone(state);nonJSON.payload.illegal=()=>{}
+  await assert.rejects(to.service.restoreState({...request,state:nonJSON}),{code:'RESTORE_PAYLOAD_INVALID'})
+  const changed=structuredClone(state);changed.payload.sessions='deeper schema error'
+  await assert.rejects(to.service.restoreState({...request,state:changed}),{code:'RESTORE_ID_CONFLICT'})
+  await assert.rejects(to.service.restoreState({...request,restoreId:'stale-new-job',sessionIds:['missing-new-session']}),{code:'REVISION_CONFLICT'})
+  assert.equal(to.stats.canonicalReads,before);assert.equal((await to.service.contentRevision()).revision,1)
+})
