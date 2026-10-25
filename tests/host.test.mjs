@@ -46,6 +46,19 @@ test('two automatic child inheritances serialize their internal revisions',async
   }finally{await service?.close();await rm(directory,{recursive:true,force:true})}
 })
 
+test('host source changes invalidate open database views and unload releases the observer',async()=>{
+  const {createDatabaseHost}=await import('../src/host.mjs'),directory=await mkdtemp(join(tmpdir(),'rp-db-events-')),f=fixture([assistant('one')]);let service
+  try{
+    service=await createDatabaseHost(f.ctx,{directory});const updates=[]
+    service.subscribe('story',event=>updates.push(event))
+    f.ctx.emit('session/event',f.agent.session,{type:'user/message'})
+    f.ctx.emit('session/event',f.agent.session,{type:'assistant/message'})
+    f.ctx.emit('session/event',f.agent.session,{type:'turn/end'})
+    assert.equal(updates.length,3)
+    await service.close();f.ctx.emit('session/event',f.agent.session,{type:'turn/end'});assert.equal(updates.length,3)
+  }finally{await service?.close();await rm(directory,{recursive:true,force:true})}
+})
+
 test('bound native database reads are scoped, locked and disabled entries cannot be bypassed, source remains exact',async()=>{
   const module=await import('../src/host.mjs').catch(()=>({}))
   assert.equal(typeof module.createDatabaseHost,'function','native database host is required')

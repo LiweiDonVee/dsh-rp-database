@@ -18,7 +18,7 @@ export async function createDatabaseHost(ctx,options={}){
   const configured=createHttpRetrieval({embedding:options.embedding,reranking:options.reranking,fetch:options.fetch})
   const retriever=options.retriever??createRetriever({...configured,...options.providers})
   const readOwner=createOwnerReader(ctx),bindings=new Map(),subscribers=new Map(),operations=new Set(),forking=new Map()
-  let stopped=false,adapter,inheritance=Promise.resolve()
+  let stopped=false,adapter,unsubscribeSource,inheritance=Promise.resolve()
   async function sync(){bindings.clear();for(const item of await store.bindings())bindings.set(item.sessionId,item);adapter?.sync()}
   await sync()
   async function run(signal,work){
@@ -89,9 +89,10 @@ export async function createDatabaseHost(ctx,options={}){
     selectFromSnapshot:selectEntries,
     authorize:(id,signal)=>run(signal,combined=>readOwner(id,combined)),
     subscribe(id,listener){const set=subscribers.get(id)??new Set();set.add(listener);subscribers.set(id,set);return()=>{set.delete(listener);if(!set.size)subscribers.delete(id)}},
-    async close(){if(stopped)return;stopped=true;for(const life of operations)life.abort();adapter?.();subscribers.clear();bindings.clear()},
+    async close(){if(stopped)return;stopped=true;unsubscribeSource?.();for(const life of operations)life.abort();adapter?.();subscribers.clear();bindings.clear()},
   }
   adapter=registerDatabaseTools(ctx,service)
+  unsubscribeSource=ctx.on('session/event',(session,event)=>{if(['user/message','assistant/message','tool/result','turn/end'].includes(event.type))changed(session.id)})
   return service
 }
 

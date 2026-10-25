@@ -74,7 +74,7 @@ export function narrativeHistory(view) {
     const owner=calls.get(event.sourceEventSeqs[0]),message=event.data?.message,envelope=event.data?.meta?.rpLastStep,item=envelope?.record
     if(!owner||!bySeq.has(owner.call.seq)||message?.isError||message?.source?.kind!=='tool'||message.toolCallId!==message.source.callId||message.toolCallId!==owner.call.data.callId
       ||event.data.turn!==owner.call.data.turn||event.data.step!==owner.call.data.step||envelope?.schemaVersion!==1||item?.status!=='complete'||typeof item.id!=='string'||typeof item.text!=='string')continue
-    results.push({id:item.id,anchor:owner.event.data.message.id,turn:event.data.turn,action:owner.action,text:item.text,createdAt:item.createdAt,
+    results.push({id:item.id,anchor:owner.event.data.message.id,turn:event.data.turn,action:typeof item.playerAction==='string'?item.playerAction:owner.action,text:item.text,createdAt:item.createdAt,
       source:{sessionId:view.sessionId,assistantMessageId:owner.event.data.message.id,callSeq:owner.call.seq,resultSeq:event.seq,callId:owner.call.data.callId}})
   }
   return results
