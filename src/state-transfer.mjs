@@ -29,15 +29,19 @@ export function restoreTransport(input){
   json(state);return ids
 }
 const unique=(values,name)=>{const set=new Set();for(const value of values){if(!text(value)||set.has(value))invalid(`Duplicate or invalid ${name}`);set.add(value)}return set}
+function additionalDatabaseRefs(value=[]){
+  if(!Array.isArray(value)||value.some(ref=>!object(ref)||Object.keys(ref).some(field=>!['databaseId','version'].includes(field))||!text(ref.databaseId)||!positive(ref.version)))throw new DatabaseError('INVALID_DATA','additionalDatabaseRefs must contain exact databaseId/version references')
+  return value
+}
 
 /** Select dependency versions only; derived vectors and operation journals are never exported. */
-export function exportDatabaseState(state,ids){
-  sessionIds(ids)
+export function exportDatabaseState(state,ids,additionalRefs){
+  sessionIds(ids);const requested=additionalDatabaseRefs(additionalRefs)
   const databases=new Map(),sources=new Map(),documents=new Map(),sessions=ids.map(id=>state.sessions[key(id)]).filter(Boolean)
   function source(id){if(!id)return;const value=state.sources[key(id)];if(!value)requireContent('An immutable source is missing');sources.set(id,value)}
   function database(id,version){
     const record=state.databases[key(id)],pinned=record?.versions.find(value=>value.database.version===version)
-    if(!pinned)requireContent('A pinned database version is missing')
+    if(!pinned)throw new DatabaseError('EXPORT_REQUIREMENT_MISSING','Missing pinned database reference '+JSON.stringify({databaseId:id,version}))
     let selected=databases.get(id);if(!selected){selected=new Map();databases.set(id,selected)}if(selected.has(version))return;selected.set(version,pinned)
     source(pinned.sourceId)
     for(const ref of pinned.documentRefs??[])document(ref.documentId,ref.version)
@@ -50,6 +54,7 @@ export function exportDatabaseState(state,ids){
     const owner=state.databases[key(pinned.document.databaseId)]?.versions[0]
     if(!owner)requireContent('A document library dependency is missing');database(pinned.document.databaseId,owner.database.version)
   }
+  for(const ref of requested)database(ref.databaseId,ref.version)
   for(const record of sessions){
     for(const binding of record.binding.sources)database(binding.databaseId,binding.version)
     source(record.sourceId)

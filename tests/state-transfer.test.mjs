@@ -103,6 +103,52 @@ test('restore validates the final state of each atomic fact batch and keeps its 
   await to.service.restoreState({...request,restoreId:'atomic-valid-schema',expectedRevision:0})
   assert.deepEqual((await to.service.exportState({sessionIds:['story']})).payload.sessions,state.payload.sessions)
 })
+
+test('T12 exports unused exact pinned libraries and their source/document closure without changing an empty runtime binding',async t=>{
+  const from=await fixture(t),to=await fixture(t)
+  from.views.set('story',{header:{id:'story'},events:[]});from.add('story')
+  const original=await from.service.importDocument({name:'World seed.txt',mimeType:'text/plain',text:'World V1 original text',requestId:'world-original',expectedRevision:0})
+  const content=await from.service.exportContent({databaseId:original.databaseId,version:1})
+  content.source.provenance={...content.source.provenance,databaseRefs:[{databaseId:'inert-audit-only',version:999}],url:'https://example.invalid/inert-audit'}
+  const world=await from.service.importContent({...content,requestId:'world-library',expectedRevision:1}),v1=await from.service.exportContent({databaseId:world.databaseId,version:1})
+  await from.service.save({database:{...v1.database,entries:v1.database.entries.map(entry=>({...entry,content:'World V2 later working text'}))},expectedRevision:2})
+  await from.service.bindSources({sessionId:'story',sources:[],expectedRevision:3,resetOverlay:false})
+  await from.service.initializeStoryState({sessionId:'story',entries:stateSeeds(),factEntryRefs:factRefs,launchId:'empty-runtime-defaults',expectedRevision:4})
+  const before=await readFile(join(from.directory,'state.json'),'utf8'),ordinary=await from.service.exportState({sessionIds:['story']})
+  assert.deepEqual(await from.service.exportState({sessionIds:['story'],additionalDatabaseRefs:[]}),ordinary)
+  const state=await from.service.exportState({sessionIds:['story'],additionalDatabaseRefs:[{databaseId:world.databaseId,version:1},{databaseId:world.databaseId,version:1}]})
+  assert.deepEqual(ordinary.payload.databases,[]);assert.deepEqual(state.payload.sessions,ordinary.payload.sessions)
+  assert.deepEqual(state.payload.databases.map(record=>({id:record.id,versions:record.versions.map(item=>item.database.version)})),[{id:world.databaseId,versions:[1]}])
+  assert.equal(state.payload.documents.length,1);assert.equal(state.payload.sources.length,1)
+  assert.equal(await readFile(join(from.directory,'state.json'),'utf8'),before)
+  const request={sessionIds:['story'],state};assert.equal((await to.service.preflightRestore(request)).supported,true)
+  to.views.set('story',structuredClone(from.views.get('story')));to.add('story')
+  await to.service.restoreState({...request,restoreId:'retained-unused-defaults',expectedRevision:0})
+  assert.deepEqual(await to.service.exportContent({databaseId:world.databaseId,version:1}),v1)
+  await assert.rejects(to.service.database({databaseId:world.databaseId,version:2}),{code:'NOT_FOUND'})
+  await assert.rejects(to.service.database({databaseId:original.databaseId,version:1}),{code:'NOT_FOUND'})
+  const effective=await to.service.effectiveV2({sessionId:'story'})
+  assert.deepEqual(effective.binding.sources,[]);assert.deepEqual(effective.entries.map(entry=>entry.id),['gm.scene','gm.facts'])
+  assert.deepEqual(JSON.parse(effective.entries.find(entry=>entry.id==='gm.facts').content),{schemaVersion:1,items:[]})
+})
+
+test('T12 missing exact references reject export without fallback or writes and additional refs accept only typed versions',async t=>{
+  const from=await fixture(t);from.views.set('story',{header:{id:'story'},events:[]});from.add('story')
+  const world=await from.service.create({name:'World V1',expectedRevision:0}),v1=await from.service.database({databaseId:world.databaseId})
+  await from.service.save({database:{...v1.database,name:'World V2'},expectedRevision:1})
+  await from.service.bindSources({sessionId:'story',sources:[],expectedRevision:2,resetOverlay:false})
+  const before=await readFile(join(from.directory,'state.json'),'utf8')
+  from.views.set('unmaterialized-child',{header:{id:'unmaterialized-child',parentSession:'story'},events:[]})
+  await assert.rejects(from.service.exportState({sessionIds:['unmaterialized-child'],additionalDatabaseRefs:[{databaseId:world.databaseId,version:99}]}),{code:'EXPORT_REQUIREMENT_MISSING'})
+  assert.equal(await readFile(join(from.directory,'state.json'),'utf8'),before,'A missing passive dependency must reject before export materializes a cold child')
+  for(const ref of [{databaseId:world.databaseId,version:99},{databaseId:'missing-library-safe-ref',version:1}]){
+    await assert.rejects(from.service.exportState({sessionIds:['story'],additionalDatabaseRefs:[ref]}),error=>{
+      assert.equal(error.code,'EXPORT_REQUIREMENT_MISSING');assert.ok(error.message.includes(ref.databaseId));assert.ok(error.message.includes(String(ref.version)));return true
+    })
+  }
+  for(const refs of [null,[{databaseId:world.databaseId}],[{databaseId:world.databaseId,version:0}],[{databaseId:world.databaseId,version:1,sourceKey:'not-a-binding'}]])await assert.rejects(from.service.exportState({sessionIds:['story'],additionalDatabaseRefs:refs}),{code:'INVALID_DATA'})
+  assert.equal(await readFile(join(from.directory,'state.json'),'utf8'),before);assert.equal((await from.service.contentRevision()).revision,3)
+})
 test('a fork may drop temporary note operations while preserving the original factual receipt fingerprint for restore',async t=>{
   const from=await source(t,{note:true}),to=await fixture(t)
   for(const[id,value]of from.views)to.views.set(id,structuredClone(value))

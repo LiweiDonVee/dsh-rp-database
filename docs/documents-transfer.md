@@ -37,13 +37,16 @@ importContent({database,source?,documents?,requestId,expectedRevision,signal?})
 导出只包含库版本关联的不可变文档版本；缺失 chunk/doc/hash 不会成为成功的悬空引用。内容 import 创建新 databaseId/version1、新 documentId/version1，documentMappings 用 JSON.stringify([oldDocumentId,oldVersion]) 映射为 {documentId,version}；Entry.provenance、Extraction refs 和 Document.databaseId 一起重映。原 source/provenance 保持审计原样；工作正文可不同于原始 chunk，不能用 provenance hash 冒充有效内容 hash。重放 requestId 返回同 mapping，异 payload 为 REQUEST_ID_CONFLICT。
 
 ```ts
-exportState({sessionIds,signal?}) -> {schemaVersion:1,revision,payload}
+exportState({sessionIds,additionalDatabaseRefs?:[{databaseId,version}],signal?})
+ -> {schemaVersion:1,revision,payload}
 preflightRestore({sessionIds,state,signal?}) -> {supported,conflicts:[{code,id}],requirements}
 restoreState({restoreId,sessionIds,state,expectedRevision,signal?})
  -> {revision,restoredSessionIds}
 ```
 
 payload.storeSchemaVersion=2，含 databases[{id,versions}]、sources[]、documents[{id,versions}]、sessions[]，只收 Database 自有数据。必要祖先必须包含在 sessionIds；冷 child 导出先完成本插件的因果继承。payload 包含 source/version/doc 依赖、原 baseline/qualified changes/事实 receipts/初始化 metadata，排除 vectors、索引时间和传输请求 journal。receipt 存储保留原 creator session/source/turnKey。
+
+T12 的 additionalDatabaseRefs 默认为 []，由 StoryKit 从所选固定 Character/template 的 typed 默认引用显式提供。导出这些精确库版本及其 source/document 依赖并去重，恢复时保留原 ID，作为 library-only 内容；不改变当前故事 sources、不自动绑定、不扫描任意 provenance 或导出整库的其他版本。例如 Character 默认 WorldV1、当前故事 sources:[] 时，WorldV1 仍可在恢复后供该资产默认值解析，当前故事继续使用空来源。显式版本缺失时返回 EXPORT_REQUIREMENT_MISSING，message 标明安全的 databaseId/version，不回退 latest、不写入源数据。
 
 T2 预检不要求目标 Session 存在，只检查 schema、内容/ID冲突与依赖。协调者先通过公共宿主 persistence 创建精确 headers/events、flush/close、cold validation；restoreState 再通过认证 owner reader 读取真实目标完整历史，核验实际 assistant anchors、真实 GM tool block/call/turn/start、祖先关系、因果政策和 stateRefs，最后在一个 Database 队列事务写入。原事实回执不能凭 JSON 声称为 canonical；不追加自定义事件或伪造 accepted history。
 

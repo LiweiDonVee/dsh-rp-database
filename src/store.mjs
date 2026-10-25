@@ -158,7 +158,7 @@ export function createDatabaseStore({ directory }) {
     validateChunkReferences(database.entries,documents);return documents;
   }
   return {
-    exportState(input) {return read(state=>exportDatabaseState(state,sessionIds(input.sessionIds)));},
+    exportState(input) {return read(state=>exportDatabaseState(state,sessionIds(input.sessionIds),input.additionalDatabaseRefs));},
     preflightRestore(input) {
       return read(state=>{
         try{

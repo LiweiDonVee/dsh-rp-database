@@ -2,6 +2,12 @@
 
 ## 0.2.0 DB-B 资料、索引与传输检查点
 
+### T12/SK7 补充接口检查点 — 2026-10-26
+
+exportState 新增 optional additionalDatabaseRefs:[{databaseId,version}]，默认为 []。额外固定版本及其 source/document 闭包去重导出，保持 exact IDs 恢复；当前 sources:[] 与 GM seed 不变，不导出 latest/其他库，不跟随原 provenance 中的任意引用。缺失版本 EXPORT_REQUIREMENT_MISSING，不回退或写入。新旧默认调用一致，正常 refs/receipt/冲突语义保持。
+
+新增2项运行时 RED→GREEN，`pnpm check` 为 **100 runtime +24 UI**，lint/build 通过。T12 后新包与 e79b46b 原生受测包的 hash 不同；新增路径以实际 tgz 的 export/restore 接口探测验证，以下 e79b46b 的 18+18 rc.3 原生记录保留为该检查点证据，本次没有机械重跑无关原生路径，也不将旧 hash 的证据标为新包原生全验。
+
 ### 审查修复轮 1 — 2026-10-25
 
 独立审查 F1/F2 已修复。预检对每个事实变更批次的最终 GM JSON 复用正常 schema 校验，真实 canonical 前缀重放也在每个活动批次后校验；不将历史或不同分支扁平化。缺 schemaVersion 的早期事实即使被后来合法批次覆盖，仍在合并前拒绝。合法批次内最终覆盖临时值仍可恢复，原 operations 保持。
