@@ -42,7 +42,8 @@ export function registerDatabaseTools(ctx,service){
     }finally{syncing=false}
   }
   sync()
-  disposers.push(ctx.on('agent/created',({agent})=>{sync(agent);void service.ensureAgent(agent).then(()=>sync(agent)).catch(()=>{})}))
+  // DSH awaits serial agent/created listeners before releasing queued prompts.
+  disposers.push(ctx.on('agent/created',async({agent})=>{await service.ensureAgent(agent);sync(agent)}))
   disposers.push(ctx.on('agent/disposed',({agent})=>{const record=scopes.get(agent);if(record){for(const dispose of record.tools)dispose();record.mask?.();record.preflight?.();scopes.delete(agent)}}))
   disposers.push(ctx.on('tools/change',()=>sync()))
   disposers.push(ctx.systemPrompt.context({name:'rp-database-workflow',order:290,required:true,interpolate:false,text:()=>{

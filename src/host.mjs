@@ -18,7 +18,7 @@ export async function createDatabaseHost(ctx,options={}){
   const configured=createHttpRetrieval({embedding:options.embedding,reranking:options.reranking,fetch:options.fetch})
   const retriever=options.retriever??createRetriever({...configured,...options.providers})
   const readOwner=createOwnerReader(ctx),bindings=new Map(),subscribers=new Map(),operations=new Set(),forking=new Map()
-  let stopped=false,adapter
+  let stopped=false,adapter,inheritance=Promise.resolve()
   async function sync(){bindings.clear();for(const item of await store.bindings())bindings.set(item.sessionId,item);adapter?.sync()}
   await sync()
   async function run(signal,work){
@@ -40,12 +40,14 @@ export async function createDatabaseHost(ctx,options={}){
     if(bindings.has(view.sessionId))return
     if(!view.parentSession||!bindings.has(view.parentSession))return
     if(forking.has(view.sessionId))return forking.get(view.sessionId)
-    const promise=(async()=>{
+    const promise=inheritance.then(async()=>{
+      if(bindings.has(view.sessionId))return
       const snapshot=await store.snapshot()
       try{await store.forkSession(view.parentSession,view.sessionId,{activeAnchors:view.activeAnchors,expectedRevision:snapshot.revision})}
       catch(error){if(error.code!=='SESSION_EXISTS')throw error}
       await sync();changed(view.sessionId)
-    })()
+    })
+    inheritance=promise.catch(()=>{})
     forking.set(view.sessionId,promise)
     try{await promise}finally{forking.delete(view.sessionId)}
   }

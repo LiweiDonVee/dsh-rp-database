@@ -16,6 +16,36 @@ function fixture(events=[]){
 }
 const assistant=id=>({seq:1,type:'assistant/message',surfaceOp:'append',data:{message:{id,role:'assistant',source:{kind:'model'},content:[]}}})
 
+test('serial agent creation waits for inheritance before the first schema collection',async()=>{
+  const {createDatabaseHost}=await import('../src/host.mjs')
+  const directory=await mkdtemp(join(tmpdir(),'rp-db-first-')),f=fixture([assistant('parent-turn')]);let service
+  try{
+    service=await createDatabaseHost(f.ctx,{directory})
+    const imported=await service.import({rawText:JSON.stringify({name:'db',entries:[]}),expectedRevision:0})
+    await service.bind({sessionId:'story',databaseId:imported.databaseId,version:1,expectedRevision:imported.revision})
+    const names=[]
+    const child={id:'child',session:{id:'child',header:{id:'child',parentSession:'story'},snapshotEvents:()=>f.events},ctx:{on:f.ctx.on,tools:{register:tool=>{names.push(tool.name);return()=>{}},restrict:()=>()=>{}}}}
+    const get=f.ctx.agents.get;f.ctx.agents.get=id=>id==='child'?child:get(id)
+    for(const listener of f.handlers.get('agent/created')??[])await listener({agent:child})
+    assert.ok(names.includes('rp_db_search'))
+    assert.equal(service.hasBinding('child'),true)
+  }finally{await service?.close();await rm(directory,{recursive:true,force:true})}
+})
+
+test('two automatic child inheritances serialize their internal revisions',async()=>{
+  const {createDatabaseHost}=await import('../src/host.mjs')
+  const directory=await mkdtemp(join(tmpdir(),'rp-db-parallel-')),f=fixture([assistant('parent-turn')]);let service
+  try{
+    service=await createDatabaseHost(f.ctx,{directory})
+    const imported=await service.import({rawText:JSON.stringify({name:'db',entries:[{id:'a',content:'base'}]}),expectedRevision:0})
+    await service.bind({sessionId:'story',databaseId:imported.databaseId,version:1,expectedRevision:imported.revision})
+    const children=['one','two'].map(id=>({id,session:{id,header:{id,parentSession:'story'},snapshotEvents:()=>f.events},ctx:{on:f.ctx.on,tools:{register:()=>()=>{},restrict:()=>()=>{}}}}))
+    const get=f.ctx.agents.get;f.ctx.agents.get=id=>children.find(child=>child.id===id)??get(id)
+    const results=await Promise.all(children.map(agent=>service.effective({sessionId:agent.id,agent})))
+    assert.deepEqual(results.map(value=>value.entries[0].content),['base','base'])
+  }finally{await service?.close();await rm(directory,{recursive:true,force:true})}
+})
+
 test('bound native database reads are scoped, locked and disabled entries cannot be bypassed, source remains exact',async()=>{
   const module=await import('../src/host.mjs').catch(()=>({}))
   assert.equal(typeof module.createDatabaseHost,'function','native database host is required')
