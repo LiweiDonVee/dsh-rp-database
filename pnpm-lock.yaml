@@ -26,6 +26,9 @@ importers:
       oxlint:
         specifier: ^1.78.0
         version: 1.89.0
+      pdf2json:
+        specifier: 4.1.0
+        version: 4.1.0
       react:
         specifier: ^18.3.1
         version: 18.3.1
@@ -850,6 +853,11 @@ packages:
 
   pathe@2.0.3:
     resolution: {integrity: sha512-WUjGcAqP1gQacoQe+OBJsFA7Ld4DyXuUIjZ5cc75cLHvJ7dtNsTugphxIADwspS+AraAUePCKrSVtPLFj/F88w==}
+
+  pdf2json@4.1.0:
+    resolution: {integrity: sha512-Nmmw7uxYUspUEBMs3Dx2/wcnAJxPGxlSYtNR/Owp/iOLKk0qK4hzUThnGSQSQshHvoNR3N4LEVKo0mHx2i7a0g==}
+    engines: {node: '>=22.23.2'}
+    hasBin: true
 
   picocolors@1.1.1:
     resolution: {integrity: sha512-xceH2snhtb5M9liqDsmEw56le376mTZkEX/jEb/RxNFyegNul7eNslCXP9FDj/Lcu0X8KEyMceP2ntpaHrDEVA==}
@@ -1714,6 +1722,8 @@ snapshots:
       entities: 4.5.0
 
   pathe@2.0.3: {}
+
+  pdf2json@4.1.0: {}
 
   picocolors@1.1.1: {}
 

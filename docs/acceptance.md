@@ -1,6 +1,66 @@
 # 数据库、主动上下文与最后一步组合验收
 
-0.1.1 导入兼容补修：51 项运行时＋15 项界面测试、lint 和构建通过。新版原生单包验收实际导入 ST 世界书映射和 V3 JSON 内嵌世界书，验证启停/必开、不可执行原件、持久报告、模型补丁与会话隔离、侧栏/全屏/520px/关闭重开；无浏览器运行错误。导入行为与边界见 [字段说明](sillytavern-import.md)。下文保留 0.1.0 完整链的历史验证范围。
+## 0.2.0 DB-B 资料、索引与传输检查点
+
+### 审查修复轮 2 / T13 — 2026-10-25
+
+Document.databaseId 按 ID-only 关联校验，移除 document owner 无条件加入首版本的遍历。仅明确请求 V2 时只导出 V2及真实 source/document，目标不同 V1 保留且不阻塞恢复；当前因果绑定明确需要 V1 时继续导出 V1+V2。未提供满足 owner ID 的明确版本则 EXPORT_REQUIREMENT_MISSING；库版本前检与最终完整闭包检查分开，允许 runtime/additional refs 共同满足关联，不猜首/最新版本。
+
+新增3项 T13 定向回归，`pnpm check` **103 runtime +24 UI**，lint/build 通过。新包的逆向版本选择/目标不同 V1/保留明确 V1 由实际 tgz 接口探测验证；本次没有重跑无关 native，历史 rc.3 证据仍按下面原 hash 归属。
+
+### T12/SK7 补充接口检查点 — 2026-10-25
+
+exportState 新增 optional additionalDatabaseRefs:[{databaseId,version}]，默认为 []。额外固定版本及其 source/document 闭包去重导出，保持 exact IDs 恢复；当前 sources:[] 与 GM seed 不变，不导出 latest/其他库，不跟随原 provenance 中的任意引用。缺失版本 EXPORT_REQUIREMENT_MISSING，不回退或写入。新旧默认调用一致，正常 refs/receipt/冲突语义保持。
+
+新增2项运行时 RED→GREEN，`pnpm check` 为 **100 runtime +24 UI**，lint/build 通过。T12 后新包与 e79b46b 原生受测包的 hash 不同；新增路径以实际 tgz 的 export/restore 接口探测验证，以下 e79b46b 的 18+18 rc.3 原生记录保留为该检查点证据，本次没有机械重跑无关原生路径，也不将旧 hash 的证据标为新包原生全验。
+
+### 审查修复轮 1 — 2026-10-25
+
+独立审查 F1/F2 已修复。预检对每个事实变更批次的最终 GM JSON 复用正常 schema 校验，真实 canonical 前缀重放也在每个活动批次后校验；不将历史或不同分支扁平化。缺 schemaVersion 的早期事实即使被后来合法批次覆盖，仍在合并前拒绝。合法批次内最终覆盖临时值仍可恢复，原 operations 保持。
+
+资料面板每次重新显示会清除已取消生命周期的 busy；请求、后续读取与 finally 均绑定到捕获的生命周期，旧完成不会更新新操作。pending 上传/索引重建的 hide→abort→reopen、保留上传 bytes/requestId、晚到成功/错误均有 RED→GREEN 回归。`pnpm check`：**98 runtime +24 UI**，lint/build 通过；package 成功，SHA256 `f2595951f3c78ed69ea39b9bcf464cb3c57720cd7ead27026ec2bafbd9b776bb`。
+
+同一包在实际官方 **rc.3** 上 `pnpm smoke` **18 项**、`pnpm smoke:documents` **18 项**通过，pageErrors=[]。新增原生断言通过“收起右侧边栏”隐藏同一仍挂载的面板，验证上传/重建请求真实 abort、重显后可重试；真实 headers/events 导入并冷读后，缺 schemaVersion 的 GM payload 在 preflight/restore 均拒绝，Database state/revision 保持不变。HTTP 长度仍为 [1,2,1,1,2,1]，目标历史模型/事实工具计数仍 0/0。T10 比较规则与整包集成边界保持如下；pdf2json package/lock/策略/随包 NOTICE 核对为实际 **4.1.0**。
+
+### 初始检查点（907902b）
+
+2026-10-25，DB-A accepted BASE `593146e` 后实现。`pnpm check` 为 **96 runtime +22 UI**，lint/build 通过；内容包保留精确 source audit、为库/文档创建新 ID，SavedStory provider 保留 exact IDs/因果记录、按 T2/T9 核验目标真实 canonical 来源后原子写入。TXT/MD 中文 UTF-8、两页真实文本 PDF、栅格无文本 PDF、策略/维度切换和 T9 错误优先级均有回归。PDF 解析器固定 pdf2json4.1.0 并打入 host bundle，无外置 CLI/OCR，Apache 通知/许可证随包。
+
+最终包 SHA256 `e177c7893aff9de6e800071a5c42c8f68e91679132c03aaf48b69c07603e1d6d`，0.2.0 / DSH `>=0.2.1-rc.3 <0.3.0-0`。`pnpm smoke` 在实际官方 **rc.3** 上18项通过、pageErrors=[]；`pnpm smoke:documents` 的15项双临时 home 原生断言通过、pageErrors=[]，证据 `.runtime/documents-transfer-evidence/acceptance.json`。
+
+真实本地 HTTP embedding 输入长度 **[1,2,1,1,2,1]**：源端首查 query1+缺失正文2，复查 query1；目标恢复时 cache 不随包导入，重建 query1+正文2；目标进程重启后仅 query1。disabled 哨兵未到 embedding/rerank。单位测试另证有效正文只变1项时仅补1项，外来提取/分块策略、模型与维度不会误命中混用；cache 写不推进 contentRevision。
+
+源端真实 normal native 模型调用3次、事实工具1次；目标公共 Session persistence 精确导入/cold观察、Database restore、resume、分叉和进程重启后，历史模型/事实工具计数都为 **0/0**。导入原始事件前缀分别23与3项，原 seq/message/source/tool metadata 严格相等；源回执能在新 home 取回。子分支在继承后的 protected prefix seq2 再分叉时，较晚 gm.facts 与 receipt 均未复活。
+
+**T10 唯一宿主兼容规则**：rc.3 冷读/重启把 header.delegationDepth 缺省/undefined 补为 number0，仅比较时视为等价。null、'0'、非零和其他 header 差异不放宽；原始观测/export数据不改写。规范事件前缀未改，合法 no-prompt resume 仅追加已验证的 session/end-seed；原始/目标对照保存在 `cold-prefix-comparison.json`。使用 Chromium1217 显式路径，真实用户 `.dsh` 未修改。
+
+这只证明 Database 独立 provider 与公共宿主机制。未安装实际 StoryKit/GM/Context/LastStep/Loop 全栈，不声称整包恢复、真实模型质量或大库性能已验；完整协调仍由 StoryKit/root 集成验收。以下 DB-A/旧版本记录保留为历史。
+
+## 0.2.0 DB-A 基础检查点
+
+### 审查修复轮 1 — 2026-10-25
+
+独立审查 F1/F2 已定向修复：旧 material facade 的 apply 使用宿主当前注册事实 refs，不再保留初始化前的空保护集；空库且尚未绑定的故事可以从 owner UI 保存 sources:[]，已绑定空列表仍保持未修改时禁用保存。公开服务/planner DTO 未改变。
+
+两项回归先 RED 后 GREEN：旧 facade 跨初始化的混合非法事实 batch 在暂存/提交均返回 FACT_OWNER_REQUIRED，revision/备注/事实不变，合法工作 note 仍可暂存；真实 host/store/routes UI 测试验证首次空绑定、无全局库创建，以及旧 dirty/revision 行为。`pnpm check` 为 **80 runtime +19 UI**，lint/build 成功；package 成功。
+
+当前 0.2.0 tgz SHA256 为 `a8f621ecc1f7457c02db1fb7def16decba35f6c5194bafe294c1c2bfaae98548`。同一 Chromium1217 显式路径下实际官方 rc.3 native smoke 的 **18 checks true、pageErrors=[]**，新增 nativeInitialEmptyBinding 与 nativeMaterialStagingAfterInitialize，并保留所有原生回执/策略/来源 UI 回归。证据仍为 `.runtime/native-evidence/acceptance.json`，新增截图 `native-initial-empty-binding.png`。未进行整链或原生冷重启验收，DB-B 未开始。
+
+### 初始检查点（76961d6）
+
+2026-10-25，实际官方 DSH **0.2.1-rc.3**、Node24.15.0、pnpm11.9.0，Windows 独立临时 DSH_HOME。`pnpm check`：79 项运行时、18 项界面测试、lint 与 build 通过。新增功能执行了真实 RED→GREEN：资格引用/迁移、多来源服务、阶段事实保护/幂等回执、精确 owner 路由/来源组合 UI；同 turn 来源替换的当前回执选择与 legacy 来源顺序/原件标识也有先失败的回归。
+
+`pnpm package` 生成 `artifacts/dsh-rp-database-0.2.0.tgz`，SHA256 `ca7ad0b9bf64effcac27198bf9d293abaf714a8ed9c34f0781622cd3c2029c91`。包内宿主范围为 `>=0.2.1-rc.3 <0.3.0-0`，没有运行时 workspace 依赖。未发布。
+
+`pnpm smoke` 使用当前官方安装，16 项原生断言通过：旧 ST/V3 导入、策略/会话隔离/原件不变；world/0 与 actor/0 独立；真实 native 合成 rp_commit_turn 的 source 通过校验；同输入重复一次、冲突带既有 receiptId、材料混合非法事实操作原子拒绝、tool 返回后可取回回执；owner UI 重新排序保留 gm.facts v2。侧栏/全屏/520px/关闭重开通过，浏览器 pageErrors=[]，窄屏 documentWidth=520。`docs/images/workspace.png` 为本轮原生多来源界面。
+
+首次 smoke 因 Playwright 1248 浏览器未缓存停在 browser 阶段；随后通过 `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=C:/Users/Owner/AppData/Local/ms-playwright/chromium-1217/chrome-win64/chrome.exe` 使用已安装 Chromium 1217，通过完整 smoke。`scripts/pack.mjs`/smoke 的既有 Windows shell spawn 产生 Node DEP0190 提示，不影响退出状态。证据位于 `.runtime/native-evidence/acceptance.json` 与同目录截图，临时 home 为 `.runtime/dsh-rp-database-smoke-1792929974291`；真实 `.dsh` 未变更。
+
+这是 Database 独立包的确定性合成工具验收，没有实际 GM/Context/Last Step 包的组合调用或付费模型。分叉 A→B 选 A、再回退到 A 前、v1 迁移、同回执原子写和插件重建恢复由运行时测试验证；本轮没有做原生进程冷重启/完整链分叉验收。文档提取、持久增量索引和 transfer/restore 为待 DB-B 实现范围。
+
+## 历史 0.1.1 / 0.1.0 记录
+
+0.1.1 导入兼容补修：51 项运行时＋15 项界面测试、lint 和构建通过。该版本原生单包验收实际导入 ST 世界书映射和 V3 JSON 内嵌世界书，验证启停/必开、不可执行原件、持久报告、模型补丁与会话隔离、侧栏/全屏/520px/关闭重开；无浏览器运行错误。导入行为与边界见 [字段说明](sillytavern-import.md)。下文保留 0.1.0 完整链的历史验证范围。
 
 2026-10-25，官方 DSH 0.2.1-rc.2，Node24、pnpm11.9，独立临时 DSH home。提供方、embedding、rerank、GM、摘要与 writer 全部是明确标识的本地确定性 fixture，没有真实付费推理或用户角色卡。
 

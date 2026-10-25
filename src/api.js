@@ -7,11 +7,15 @@ export function createRpDatabaseApi(send = (...args) => globalThis.fetch(...args
     let data
     try { data = await response.json() }
     catch { throw Object.assign(new Error('无法读取数据库响应，请重试。'), {status: response.status}) }
-    if (!response.ok || data?.error) throw Object.assign(new Error(data?.error?.message || '数据库请求失败，请重试。'), {status: response.status, code: data?.error?.code})
+    if (!response.ok || data?.error) throw Object.assign(new Error(data?.error?.message || '数据库请求失败，请重试。'), {status: response.status, code: data?.error?.code,...data?.error?.code==='TURN_ALREADY_COMMITTED'&&typeof data.error.receiptId==='string'?{receiptId:data.error.receiptId}:{}})
     if (!data || typeof data !== 'object') throw new Error('数据库响应不完整，请重新载入。')
     return data
   }
   return {
+    importDocument: (input,signal) => request('importDocument',input,signal),
+    document: (documentId,version,signal) => request('document',{documentId,...version===undefined?{}:{version}},signal),
+    indexState: signal => request('indexState',{},signal),
+    rebuildIndex: (input,signal) => request('rebuildIndex',input??{},signal),
     state: (sessionId, signal) => request('state', sessionId ? {sessionId} : {}, signal),
     database: (databaseId, version, signal) => request('database', {databaseId, ...(version === undefined ? {} : {version})}, signal),
     source: (sourceId, signal) => request('source', {sourceId}, signal),
@@ -19,6 +23,11 @@ export function createRpDatabaseApi(send = (...args) => globalThis.fetch(...args
     import: (rawText, options, signal) => request('import', {rawText, ...options}, signal),
     save: (database, expectedRevision, signal) => request('save', {database, expectedRevision}, signal),
     bind: (sessionId, input, signal) => request('bind', {sessionId, ...input}, signal),
+    bindSources: (sessionId, input, signal) => request('bindSources', {sessionId, ...input}, signal),
+    effectiveV2: (sessionId, signal) => request('effectiveV2', {sessionId}, signal),
+    catalogV2: (sessionId, signal) => request('catalogV2', {sessionId}, signal),
+    readV2: (sessionId, refs, signal) => request('readV2', {sessionId, refs}, signal),
+    searchV2: (sessionId, query, signal) => request('searchV2', {sessionId, query}, signal),
     search: (sessionId, query, signal) => request('search', {sessionId, query}, signal),
     subscribe(sessionId, onEvent, onError) {
       const url = new URL('api/rp-database/events', document.baseURI)

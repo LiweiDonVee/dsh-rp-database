@@ -1,15 +1,17 @@
 import {DatabaseError} from './core.mjs'
+import {entryRef,sourceBindings} from './references.mjs'
 
-const fields={state:['sessionId'],database:['databaseId','version'],source:['sourceId'],create:['name','expectedRevision'],import:['rawText','name','expectedRevision'],save:['database','expectedRevision'],bind:['sessionId','databaseId','version','expectedRevision'],search:['sessionId','query','limit']}
-const writes=new Set(['create','import','save','bind'])
+const fields={state:['sessionId'],database:['databaseId','version'],source:['sourceId'],create:['name','expectedRevision'],import:['rawText','name','expectedRevision'],save:['database','expectedRevision'],bind:['sessionId','databaseId','version','expectedRevision'],search:['sessionId','query','limit'],bindSources:['sessionId','sources','expectedRevision','resetOverlay'],effectiveV2:['sessionId'],catalogV2:['sessionId'],readV2:['sessionId','refs'],searchV2:['sessionId','query','limit']}
+Object.assign(fields,{importDocument:['name','mimeType','dataBase64','text','requestId','expectedRevision'],document:['documentId','version'],indexState:[],rebuildIndex:['databaseIds'],contentRevision:[]})
+const writes=new Set(['create','import','save','bind','bindSources','importDocument'])
 const id=value=>typeof value==='string'&&value.trim().length>0&&value.length<=256
 const object=value=>value!==null&&typeof value==='object'&&!Array.isArray(value)
-const failure=(status,code,message)=>Response.json({error:{code,message}},{status,headers:{'cache-control':'no-store'}})
+const failure=(status,code,message,receiptId)=>Response.json({error:{code,message,...code==='TURN_ALREADY_COMMITTED'&&typeof receiptId==='string'?{receiptId}:{}}},{status,headers:{'cache-control':'no-store'}})
 function valid(input){
   if(!object(input)||!Object.hasOwn(fields,input.action)||Object.keys(input).some(key=>key!=='action'&&!fields[input.action].includes(key)))return false
   if(writes.has(input.action)&&(!Number.isSafeInteger(input.expectedRevision)||input.expectedRevision<0))return false
   if(input.sessionId!==undefined&&!id(input.sessionId))return false
-  if(['bind','search'].includes(input.action)&&!id(input.sessionId))return false
+  if(['bind','search','bindSources','effectiveV2','catalogV2','readV2','searchV2'].includes(input.action)&&!id(input.sessionId))return false
   if(['database','bind'].includes(input.action)&&!id(input.databaseId))return false
   if(input.version!==undefined&&(!Number.isSafeInteger(input.version)||input.version<1))return false
   if(input.action==='bind'&&input.version===undefined)return false
@@ -17,11 +19,25 @@ function valid(input){
   if(input.action==='create'&&!id(input.name))return false
   if(input.action==='import'&&(typeof input.rawText!=='string'||input.rawText.length>8_000_000||input.name!==undefined&&!id(input.name)))return false
   if(input.action==='save'&&!object(input.database))return false
-  if(input.action==='search'&&(typeof input.query!=='string'||input.query.length>4000||input.limit!==undefined&&(!Number.isSafeInteger(input.limit)||input.limit<1||input.limit>100)))return false
+  if(['search','searchV2'].includes(input.action)&&(typeof input.query!=='string'||input.query.length>4000||input.limit!==undefined&&(!Number.isSafeInteger(input.limit)||input.limit<1||input.limit>100)))return false
+  if(input.action==='bindSources'){
+    if(typeof input.resetOverlay!=='boolean')return false
+    try{const sources=sourceBindings(input.sources);if(sources.some(source=>!id(source.key)||!id(source.databaseId)))return false}catch{return false}
+  }
+  if(input.action==='readV2'){
+    if(!Array.isArray(input.refs))return false
+    try{if(input.refs.map(entryRef).some(ref=>!id(ref.sourceKey)||!id(ref.entryId)))return false}catch{return false}
+  }
+  if(input.action==='importDocument'){
+    if(!id(input.name)||!id(input.requestId)||!['text/plain','text/markdown','application/pdf'].includes(input.mimeType)||(input.text===undefined)===(input.dataBase64===undefined)||input.mimeType==='application/pdf'&&input.text!==undefined)return false
+    if(input.text!==undefined&&(typeof input.text!=='string'||input.text.length>8_000_000)||input.dataBase64!==undefined&&(typeof input.dataBase64!=='string'||input.dataBase64.length>32_000_000))return false
+  }
+  if(input.action==='document'&&!id(input.documentId))return false
+  if(input.action==='rebuildIndex'&&input.databaseIds!==undefined&&(!Array.isArray(input.databaseIds)||input.databaseIds.some(value=>!id(value))))return false
   return true
 }
 function errorResponse(error){
-  if(error instanceof DatabaseError||error?.name==='DatabaseError')return failure(error.status??400,error.code,error.message)
+  if(error instanceof DatabaseError||error?.name==='DatabaseError')return failure(error.status??400,error.code,error.message,error.receiptId)
   if(error?.name==='AbortError')return failure(499,'CANCELLED','The request was cancelled')
   return failure(503,'UNAVAILABLE','Database is temporarily unavailable')
 }

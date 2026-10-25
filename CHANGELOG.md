@@ -1,5 +1,16 @@
 # 更新记录
 
+## 0.2.0 — 2026-10-25
+
+- DB-A 基础检查点：有序固定多来源、资格引用、@session 新增和保留因果记录的 v1→v2 迁移。
+- 增加 apiVersion 2 服务与 Context 材料 facade；多来源裸选择器明确拒绝，人类策略跨来源生效。
+- GM seed 按 launchId 初始化；事实阶段独占注册 refs，事实操作与幂等回执在单文件事务中一起持久化，分叉/回退同步投影。
+- 原生 owner 来源组合可排序、改槽位/版本并查看同 ID 的来源；破坏性变更说明影响，冲突保留草稿。已初始化 GM 故事禁止通过重绑定清除事实/回执。
+- DB-B：TXT/Markdown/真实文本层 PDF、不可变字节/提取/页段 provenance；无文本层明确诊断，无外置 CLI/OCR。
+- 同文件队列的持久派生向量缓存、内容/提供方/模型/维度隔离、显式降级与 owner 重建状态；缓存不推进世界 revision。
+- 内容包新 ID/document mappings 与请求幂等；SavedStory provider 的精确 ID、结构/冲突预检、真实目标 canonical 引用校验及原子 restoreId 恢复，保留无关记录。
+- 新包宿主最低版本为 0.2.1-rc.3；0.1.1 的 rc.2 历史验收保留。完整故事恢复仍由 StoryKit 协调，Database 只恢复自己的状态。
+
 ## 0.1.1 — 2026-10-25
 
 - 补齐 ST 独立世界书、常见条目数组、标准 Character Book 和角色卡 V2/V3 JSON 内嵌世界书导入。

@@ -15,7 +15,7 @@ function tokens(text) {
   }
   return [...new Set(words)];
 }
-const document = entry => [entry.id, entry.title, ...entry.keywords, ...entry.tags, entry.content, entry.notes].join('\n');
+export const retrievalDocument = entry => [entry.title, ...entry.keywords, ...entry.tags, entry.content, entry.notes].join('\n');
 function lexical(entry, query, queryTokens) {
   const reasons = [];
   let score = 0;
@@ -24,12 +24,12 @@ function lexical(entry, query, queryTokens) {
   if (normalize(entry.title).includes(query)) { score += 60; reasons.push('title'); }
   if (entry.keywords.some(key => normalize(key).includes(query) || (normalize(key) && query.includes(normalize(key))))) { score += 50; reasons.push('keyword'); }
   if (entry.tags.some(tag => normalize(tag).includes(query))) { score += 30; reasons.push('tag'); }
-  const text = normalize(document(entry));
+  const text = normalize([entry.id,retrievalDocument(entry)].join('\n'));
   const matched = queryTokens.filter(token => text.includes(token)).length;
   if (matched) { score += 10 * matched / queryTokens.length; reasons.push('lexical'); }
   return { score, reasons };
 }
-function validateVectors(vectors, expected) {
+export function validateVectors(vectors, expected) {
   if (!Array.isArray(vectors) || vectors.length !== expected) throw new Error('Invalid embedding count');
   const dimension = vectors[0]?.length;
   if (!Number.isSafeInteger(dimension) || dimension < 1 || vectors.some(vector => !Array.isArray(vector) || vector.length !== dimension || vector.some(value => typeof value !== 'number' || !Number.isFinite(value)))) throw new Error('Invalid embeddings');
@@ -53,8 +53,8 @@ function unit(vector) {
 }
 const cosine = (a, b) => a.reduce((sum, value, index) => sum + value * b[index], 0);
 
-export function createRetriever({ embed, rerank } = {}) {
-  if (embed !== undefined && typeof embed !== 'function' || rerank !== undefined && typeof rerank !== 'function') throw new DatabaseError('INVALID_RETRIEVAL_CONFIG', 'Retrieval providers must be functions');
+export function createRetriever({ embed, rerank, embedEntries } = {}) {
+  if (embed !== undefined && typeof embed !== 'function' || rerank !== undefined && typeof rerank !== 'function' || embedEntries!==undefined&&typeof embedEntries!=='function') throw new DatabaseError('INVALID_RETRIEVAL_CONFIG', 'Retrieval providers must be functions');
   return {
     async search({ entries, query, limit = 12, signal }) {
       checkAbort(signal);
@@ -62,16 +62,17 @@ export function createRetriever({ embed, rerank } = {}) {
       const enabled = validateDatabase({ id: 'retrieval', name: 'Retrieval', version: 1, entries }).entries.filter(entry => entry.mode !== 'disabled');
       const required = enabled.filter(entry => entry.mode === 'required').map(entry => entry.id);
       const degraded = [];
-      if (!embed) degraded.push('embedding_unconfigured');
+      if (!embed&&!embedEntries) degraded.push('embedding_unconfigured');
       if (!rerank) degraded.push('reranking_unconfigured');
       const queryText = normalize(query.trim());
       const queryTokens = tokens(queryText);
       const lexicalRanks = enabled.map((entry, index) => ({ id: entry.id, index, ...lexical(entry, queryText, queryTokens) })).filter(item => item.score > 0).sort((a, b) => b.score - a.score || a.index - b.index);
       const scores = new Map(lexicalRanks.map(item => [item.id, item]));
-      const documents = enabled.map(document);
-      if (embed && enabled.length) {
+      const documents = enabled.map(retrievalDocument);
+      if ((embed||embedEntries) && enabled.length) {
         try {
-          const vectors = validateVectors(await embed([query, ...documents], signal), enabled.length + 1).map(unit);
+          const values=embedEntries?await embedEntries({query,documents,entries:enabled,signal}):await embed([query,...documents],signal)
+          const vectors = validateVectors(values, enabled.length + 1).map(unit);
           checkAbort(signal);
           const semantic = enabled.map((entry, index) => ({ id: entry.id, index, score: cosine(vectors[0], vectors[index + 1]) })).sort((a, b) => b.score - a.score || a.index - b.index);
           for (const item of scores.values()) item.score = 0;

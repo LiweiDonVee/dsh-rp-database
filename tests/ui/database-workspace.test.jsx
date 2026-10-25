@@ -29,6 +29,7 @@ function fixture({empty=false}={}) {
     let result
     if(overrides[input.action]) result=await overrides[input.action](input,options)
     else if(input.action==='state')result={...clone(state),databases:list()}
+    else if(input.action==='effectiveV2')result={...clone(state.binding),binding:{schemaVersion:2,sources:[{key:'legacy',databaseId:state.binding.databaseId,version:state.binding.version}],factEntryRefs:[]},entries:clone(state.binding.entries).map(entry=>({...entry,ref:{sourceKey:'legacy',entryId:entry.id}}))}
     else if(input.action==='database')result={revision:state.revision,database:clone(versions.get(`${input.databaseId}:${input.version??dbs.get(input.databaseId)?.version}`))}
     else if(input.action==='source')result={source}
     else if(input.action==='import'||input.action==='create'){
@@ -43,7 +44,7 @@ function fixture({empty=false}={}) {
     }else if(input.action==='bind'){
       state.revision++;state.binding={revision:state.revision,databaseId:input.databaseId,version:input.version,sourceId:'source-a',entries:clone(versions.get(`${input.databaseId}:${input.version}`).entries),notes:[],changes:[]}
       result={revision:state.revision,databaseId:input.databaseId,version:input.version,session:clone(state.binding)}
-    }else if(input.action==='search')result={revision:state.revision,candidates:[{id:'entry-a',score:1,reasons:['keyword:港口']}],required:['entry-a'],degraded:['EMBEDDING_FAILED','RERANKING_UNCONFIGURED']}
+    }else if(input.action==='search'||input.action==='searchV2')result={revision:state.revision,candidates:[{ref:{sourceKey:'legacy',entryId:'entry-a'},score:1,reasons:['keyword:港口']}],required:[{sourceKey:'legacy',entryId:'entry-a'}],degraded:['EMBEDDING_FAILED','RERANKING_UNCONFIGURED']}
     return new Response(JSON.stringify(result),{status:result?.error?409:200,headers:{'content-type':'application/json'}})
   }
   return {client:createRpDatabaseApi(send),calls,overrides,state,dbs,versions,source}

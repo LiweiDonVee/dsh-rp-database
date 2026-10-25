@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 2,
+  "sources": [
+    {"key":"world","databaseId":"synthetic-world","version":1},
+    {"key":"actor","databaseId":"synthetic-actor","version":1}
+  ],
+  "factEntryRefs": [
+    {"sourceKey":"@session","entryId":"gm.scene"},
+    {"sourceKey":"@session","entryId":"gm.facts"}
+  ]
+}

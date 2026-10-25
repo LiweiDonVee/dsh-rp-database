@@ -1,6 +1,6 @@
 {
   "name": "dsh-rp-database",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "DSH RP 动态数据库与会话继承",
   "license": "MIT",
   "type": "module",
@@ -12,13 +12,14 @@
   },
   "files": [
     "dist",
+    "third-party",
     "cordis.patch.yml",
     "README.md",
     "LICENSE"
   ],
   "engines": {
     "node": ">=24",
-    "dsh": ">=0.2.1-rc.2 <0.3.0-0"
+    "dsh": ">=0.2.1-rc.3 <0.3.0-0"
   },
   "dsh": {
     "bundle": {
@@ -41,7 +42,8 @@
     "test:ui": "vitest run",
     "check": "pnpm lint && pnpm test && pnpm build",
     "package": "pnpm build && node scripts/pack.mjs",
-    "smoke": "node scripts/smoke.mjs"
+    "smoke": "node scripts/smoke.mjs",
+    "smoke:documents": "node scripts/documents-transfer-smoke.mjs"
   },
   "peerDependencies": {
     "react": "^18.3.1"
@@ -53,6 +55,7 @@
     "esbuild": "^0.28.2",
     "jsdom": "^26.1.0",
     "oxlint": "^1.78.0",
+    "pdf2json": "4.1.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "vitest": "^4.1.11"
