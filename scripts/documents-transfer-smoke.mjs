@@ -8,6 +8,7 @@ import {isDeepStrictEqual} from 'node:util'
 import {resolve,join} from 'node:path'
 import {chromium} from '@playwright/test'
 import {syntheticPdf} from '../tests/fixtures/synthetic-pdf.mjs'
+import {factCommit,fingerprint} from '../src/facts.mjs'
 
 const root=process.cwd(),stamp=Date.now(),sourceHome=resolve(`.runtime/db-b-source-${stamp}`),destinationHome=resolve(`.runtime/db-b-destination-${stamp}`),evidence=resolve('.runtime/documents-transfer-evidence')
 const manifest=JSON.parse(await readFile('package.json','utf8')),artifact=resolve(`artifacts/${manifest.name}-${manifest.version}.tgz`),artifactSHA256=createHash('sha256').update(await readFile(artifact)).digest('hex')
@@ -33,6 +34,27 @@ const embeddings=()=>httpCalls.filter(call=>call.path.endsWith('/embeddings'))
 const countersZero=value=>value.models===0&&value.factTools===0
 // Frozen T10: preserve observed data; normalize this one optional host default only for comparison.
 const headerIdentity=header=>({...header,delegationDepth:header.delegationDepth===undefined?0:header.delegationDepth})
+async function cancelAndReopen(panel,action,button){
+  let captured;const held=new Promise(resolve=>{captured=resolve}),pattern='**/api/rp-database/request',mounted=await panel.elementHandle()
+  const intercept=route=>{if(route.request().postDataJSON()?.action===action){captured(route);return}return route.continue()}
+  await page.route(pattern,intercept)
+  try{
+    await panel.getByRole('button',{name:button,exact:true}).click()
+    const route=await Promise.race([held,new Promise((_resolve,reject)=>setTimeout(()=>reject(Error('Pending native '+action+' was not captured')),15000))]),request=route.request(),failed=page.waitForEvent('requestfailed',{predicate:value=>value===request})
+    assert(await panel.getByLabel('TXT、Markdown 或 PDF 文件',{exact:true}).isDisabled(),'Pending native operation was not busy')
+    await page.getByRole('button',{name:'收起右侧边栏',exact:true}).click();await panel.waitFor({state:'hidden'})
+    await route.continue().catch(()=>{});const failure=await failed
+    assert(/abort/i.test(failure.failure()?.errorText??''),'Hiding the native panel did not abort its request')
+    await page.unroute(pattern,intercept)
+    await page.getByRole('button',{name:'打开故事数据库',exact:true}).click();await panel.waitFor({state:'visible'})
+    assert(await panel.evaluate((node,original)=>node===original,mounted),'Native hide/show unexpectedly remounted the workspace')
+    await panel.getByLabel('TXT、Markdown 或 PDF 文件',{exact:true}).waitFor()
+    assert(await panel.getByLabel('TXT、Markdown 或 PDF 文件',{exact:true}).isEnabled(),'Reopened native file control remained busy')
+    assert(await panel.getByRole('button',{name:button,exact:true}).isEnabled(),'Reopened native '+action+' remained busy')
+    await panel.getByRole('button',{name:button,exact:true}).click()
+    return{aborted:true,retryEnabled:true,sameMountedPanel:true}
+  }finally{await page.unroute(pattern,intercept);await mounted.dispose()}
+}
 try{
   result.hostVersion=await run(['--version'],sourceEnv)
   await run(['plugin','--profile','web','add',artifact],sourceEnv)
@@ -43,7 +65,8 @@ try{
   stage='document-native-ui'
   await page.evaluate(id=>window.__workspaceCtx.get('uiWorkspace').openSession(id),story.sessionId);await page.getByRole('button',{name:'打开故事数据库',exact:true}).click()
   const panel=page.locator(`[data-rp-database-session="${story.sessionId}"]`),pdf=syntheticPdf()
-  await panel.getByLabel('TXT、Markdown 或 PDF 文件',{exact:true}).setInputFiles({name:'native-text.pdf',mimeType:'application/pdf',buffer:pdf});await panel.getByRole('button',{name:'导入资料',exact:true}).click()
+  await panel.getByLabel('TXT、Markdown 或 PDF 文件',{exact:true}).setInputFiles({name:'native-text.pdf',mimeType:'application/pdf',buffer:pdf})
+  const uploadLifecycle=await cancelAndReopen(panel,'importDocument','导入资料')
   await panel.getByText('Harbor alpha',{exact:true}).first().waitFor();await panel.getByText('第 2 页 · 第 1 段',{exact:true}).waitFor()
   let state=await api('state');const docDatabase=state.databases.find(value=>value.name==='native-text.pdf'),docRef=docDatabase.documentRefs[0],document=await api('document',docRef)
   assert(document.document.dataBase64===pdf.toString('base64'),'Native PDF original bytes changed');assert((await api('effectiveV2',{sessionId:story.sessionId})).binding.sources.length===0,'Upload auto-bound the story')
@@ -57,12 +80,18 @@ try{
   await api('searchV2',{sessionId:docStory.sessionId,query:'harbor'});await api('searchV2',{sessionId:docStory.sessionId,query:'harbor'})
   assert(JSON.stringify(embeddings().slice(mark).map(call=>call.input.length))==='[1,2,1]','Native repeated query reembedded unchanged chunks');assert((await api('contentRevision')).revision===before.revision,'Cache advanced content revision')
   assert(httpCalls.every(call=>!JSON.stringify(call).includes('DISABLED_NATIVE_CANARY')),'Disabled source reached a provider')
+  stage='native-index-cancel-reopen'
+  const indexLifecycle=await cancelAndReopen(panel,'rebuildIndex','重建启用库索引');await panel.getByText(/已索引 \d+ 项，复用 \d+ 项/).waitFor()
   const bundle=await probe({action:'snapshotBundle',sessionIds:[story.sessionId,docStory.sessionId]})
   assert(bundle.database.payload.documents.length===1&&!Object.hasOwn(bundle.database.payload,'vectorIndex'),'Export included unrelated documents or derived cache')
   await writeFile(join(evidence,'public-bundle.json'),JSON.stringify(bundle,null,2))
   stage='exact-cold-restore'
   await kill(host);host=null;await run(['plugin','--profile','web','add',artifact],destinationEnv);await visit(await start(destinationEnv))
-  const restored=await probe({action:'restoreBundle',bundle,restoreId:'native-restore'})
+  const invalidState=structuredClone(bundle.database),badRecord=invalidState.payload.sessions.find(record=>record.id===story.sessionId),badItem=badRecord.receipts[0],badReceipt=badItem.receipt,badChange=badRecord.changes.find(change=>change.id===badReceipt.changeId)
+  badChange.operations.find(operation=>operation.op==='update'&&operation.ref.entryId==='gm.facts').patch.content=JSON.stringify({items:[{id:'invalid',text:'Missing schemaVersion'}]})
+  const badCommit=factCommit({turnKey:badReceipt.turnKey,source:badReceipt.source,expectedRevision:0,operations:badChange.operations,summary:badReceipt.summary,packet:badReceipt.packet,kind:badReceipt.kind},badReceipt.sessionId),{expectedRevision:_badRevision,...badIdentity}=badCommit;badItem.fingerprint=fingerprint(badIdentity)
+  const restored=await probe({action:'restoreBundle',bundle,invalidState,restoreId:'native-restore'})
+  assert(restored.rejectedSchema?.preflight.supported===false&&restored.rejectedSchema.code==='RESTORE_PAYLOAD_INVALID'&&restored.rejectedSchema.unchanged&&restored.rejectedSchema.beforeRevision===restored.rejectedSchema.afterRevision,'Native restore accepted malformed GM facts or changed data/revision on rejection')
   assert(restored.result.revision===restored.replay.revision&&countersZero(restored.counters),'Restore replay mutated data or executed historical models/tools')
   for(const original of bundle.sessions){const cold=restored.cold.find(value=>value.header.id===original.header.id);assert(!cold.live&&isDeepStrictEqual(headerIdentity(cold.header),headerIdentity(original.header))&&isDeepStrictEqual(cold.events,original.events)&&cold.inheritedEventCount===original.inheritedEventCount,'Exact imported cold log differs')}
   stage='restored-resume'
@@ -88,6 +117,6 @@ try{
   const recovered=await probe({action:'resumeFacts',sessionId:story.sessionId,receiptId:receipt.id}),recoveredPrior=await probe({action:'resumeFacts',sessionId:prior.sessionId,receiptId:receipt.id})
   assert(recovered.receipt?.id===receipt.id&&!recoveredPrior.receipt&&countersZero(recoveredPrior.counters),'Restart lost receipt causality or executed historical work')
   assert(pageErrors.length===0,'Browser errors: '+JSON.stringify(pageErrors))
-  result={...result,passed:true,checks:{realTextPdf:true,noTextLayer:true,originalBytes:true,noAutoBind:true,freshDocumentContentMapping:true,incrementalHttp:true,disabledExcluded:true,cacheOmittedFromTransfer:true,exactColdLogs:true,restoreCanonicalRefs:true,restoreReplay:true,noHistoricalExecution:true,inheritedPrefixRewind:true,processRestart:true,persistedIndex:true},httpEmbeddingInputLengths:embeddings().map(call=>call.input.length),nativeCounters:{source:bundle.counters,destinationAfterRestore:restored.counters,destinationAfterRestart:recoveredPrior.counters},importedPrefixes:bundle.sessions.map(value=>({sessionId:value.header.id,eventCount:value.events.length})),headerNormalization:'T10: delegationDepth undefined equals numeric 0 only',resumeSuffixTypes:cold.sessions.find(value=>value.header.id===story.sessionId).events.slice(bundle.sessions.find(value=>value.header.id===story.sessionId).events.length).map(event=>event.type),rewindBoundary:boundary.seq,receiptId:receipt.id,pageErrors}
+  result={...result,passed:true,checks:{realTextPdf:true,noTextLayer:true,originalBytes:true,noAutoBind:true,freshDocumentContentMapping:true,incrementalHttp:true,disabledExcluded:true,cacheOmittedFromTransfer:true,exactColdLogs:true,restoreCanonicalRefs:true,restoreReplay:true,noHistoricalExecution:true,inheritedPrefixRewind:true,processRestart:true,persistedIndex:true,restoreFactSchema:true,nativeUploadCancelReopen:true,nativeIndexCancelReopen:true},cancelReopen:{upload:uploadLifecycle,index:indexLifecycle},rejectedFactSchema:restored.rejectedSchema,httpEmbeddingInputLengths:embeddings().map(call=>call.input.length),nativeCounters:{source:bundle.counters,destinationAfterRestore:restored.counters,destinationAfterRestart:recoveredPrior.counters},importedPrefixes:bundle.sessions.map(value=>({sessionId:value.header.id,eventCount:value.events.length})),headerNormalization:'T10: delegationDepth undefined equals numeric 0 only',resumeSuffixTypes:cold.sessions.find(value=>value.header.id===story.sessionId).events.slice(bundle.sessions.find(value=>value.header.id===story.sessionId).events.length).map(event=>event.type),rewindBoundary:boundary.seq,receiptId:receipt.id,pageErrors}
 }catch(error){result={...result,passed:false,stage,error:redact(error.message),pageErrors};process.exitCode=1;if(page)await page.screenshot({path:join(evidence,'failure.png')}).catch(()=>{});await writeFile(join(evidence,'host-redacted.log'),redact(logs.slice(-18000)))}finally{await browser?.close();await kill(host);await new Promise(done=>{server.close(done);server.closeAllConnections()})}
 await writeFile(join(evidence,'acceptance.json'),JSON.stringify(result,null,2));await writeFile(join(evidence,'http-calls.json'),JSON.stringify(httpCalls,null,2));console.log(JSON.stringify(result))

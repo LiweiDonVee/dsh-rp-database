@@ -2,6 +2,16 @@
 
 ## 0.2.0 DB-B 资料、索引与传输检查点
 
+### 审查修复轮 1 — 2026-10-25
+
+独立审查 F1/F2 已修复。预检对每个事实变更批次的最终 GM JSON 复用正常 schema 校验，真实 canonical 前缀重放也在每个活动批次后校验；不将历史或不同分支扁平化。缺 schemaVersion 的早期事实即使被后来合法批次覆盖，仍在合并前拒绝。合法批次内最终覆盖临时值仍可恢复，原 operations 保持。
+
+资料面板每次重新显示会清除已取消生命周期的 busy；请求、后续读取与 finally 均绑定到捕获的生命周期，旧完成不会更新新操作。pending 上传/索引重建的 hide→abort→reopen、保留上传 bytes/requestId、晚到成功/错误均有 RED→GREEN 回归。`pnpm check`：**98 runtime +24 UI**，lint/build 通过；package 成功，SHA256 `f2595951f3c78ed69ea39b9bcf464cb3c57720cd7ead27026ec2bafbd9b776bb`。
+
+同一包在实际官方 **rc.3** 上 `pnpm smoke` **18 项**、`pnpm smoke:documents` **18 项**通过，pageErrors=[]。新增原生断言通过“收起右侧边栏”隐藏同一仍挂载的面板，验证上传/重建请求真实 abort、重显后可重试；真实 headers/events 导入并冷读后，缺 schemaVersion 的 GM payload 在 preflight/restore 均拒绝，Database state/revision 保持不变。HTTP 长度仍为 [1,2,1,1,2,1]，目标历史模型/事实工具计数仍 0/0。T10 比较规则与整包集成边界保持如下；pdf2json package/lock/策略/随包 NOTICE 核对为实际 **4.1.0**。
+
+### 初始检查点（907902b）
+
 2026-10-25，DB-A accepted BASE `593146e` 后实现。`pnpm check` 为 **96 runtime +22 UI**，lint/build 通过；内容包保留精确 source audit、为库/文档创建新 ID，SavedStory provider 保留 exact IDs/因果记录、按 T2/T9 核验目标真实 canonical 来源后原子写入。TXT/MD 中文 UTF-8、两页真实文本 PDF、栅格无文本 PDF、策略/维度切换和 T9 错误优先级均有回归。PDF 解析器固定 pdf2json4.1.0 并打入 host bundle，无外置 CLI/OCR，Apache 通知/许可证随包。
 
 最终包 SHA256 `e177c7893aff9de6e800071a5c42c8f68e91679132c03aaf48b69c07603e1d6d`，0.2.0 / DSH `>=0.2.1-rc.3 <0.3.0-0`。`pnpm smoke` 在实际官方 **rc.3** 上18项通过、pageErrors=[]；`pnpm smoke:documents` 的15项双临时 home 原生断言通过、pageErrors=[]，证据 `.runtime/documents-transfer-evidence/acceptance.json`。

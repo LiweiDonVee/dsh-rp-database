@@ -56,9 +56,15 @@ export function apply(ctx){
    for(const item of input.bundle.sessions){const existing=await ctx.sessionPersistence.stat(item.header.id);if(existing)throw Object.assign(Error('Destination Session exists'),{code:'RESTORE_ID_CONFLICT'})}
    for(const item of input.bundle.sessions){const handle=await ctx.sessionPersistence.create(item.header,{inheritedEventCount:item.inheritedEventCount});try{await handle.append(item.events);await handle.flush()}finally{await handle.close()}}
    const cold=[];for(const id of ids)cold.push(await observed(id))
+   let rejectedSchema
+   if(input.invalidState){
+    const before=await service.state(),invalid={sessionIds:ids,state:input.invalidState,signal:request.signal},preflight=await service.preflightRestore(invalid);let code
+    try{await service.restoreState({...invalid,restoreId:input.restoreId+'-invalid-schema',expectedRevision:before.revision})}catch(error){code=error.code}
+    const after=await service.state();rejectedSchema={preflight,code,beforeRevision:before.revision,afterRevision:after.revision,unchanged:JSON.stringify(before)===JSON.stringify(after)}
+   }
    const result=await service.restoreState({restoreId:input.restoreId,sessionIds:ids,state,expectedRevision:(await service.contentRevision()).revision,signal:request.signal})
    const replay=await service.restoreState({restoreId:input.restoreId,sessionIds:ids,state,expectedRevision:0,signal:request.signal})
-   return Response.json({result,replay,cold,counters})
+   return Response.json({result,replay,cold,counters,...rejectedSchema?{rejectedSchema}:{}})
   }
   if(input.action==='resumeFacts'){
    let agent=ctx.agents.get(input.sessionId)

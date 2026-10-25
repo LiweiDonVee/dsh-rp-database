@@ -5,9 +5,10 @@ const base64=buffer=>{let value='';for(const byte of new Uint8Array(buffer))valu
 export function DocumentPanel({client,state,visible,sessionId,blocked,documentRef,selectedDatabaseId,selectedEntry,onImported,onRefresh}){
   const [draft,setDraft]=useState(null),[preview,setPreview]=useState(null),[index,setIndex]=useState(null),[busy,setBusy]=useState(''),[failure,setFailure]=useState(null),[notice,setNotice]=useState('')
   const life=useRef(null),fileToken=useRef(0),previewToken=useRef(0),indexToken=useRef(0)
-  async function request(work){const scope=life.current;if(!scope?.active)throw new DOMException('Cancelled','AbortError');const controller=new AbortController();scope.controllers.add(controller);try{const value=await work(controller.signal);if(!scope.active)throw new DOMException('Cancelled','AbortError');return value}finally{scope.controllers.delete(controller)}}
-  useEffect(()=>{if(!visible)return;const scope={active:true,controllers:new Set(),readers:new Set()};life.current=scope;return()=>{scope.active=false;for(const controller of scope.controllers)controller.abort();for(const reader of scope.readers)reader.abort();fileToken.current++;previewToken.current++;indexToken.current++}},[client,visible,sessionId])
-  async function refreshIndex(){const token=++indexToken.current;try{const value=await request(signal=>client.indexState(signal));if(token===indexToken.current)setIndex(value)}catch(error){if(error.name!=='AbortError'&&token===indexToken.current)setIndex({readyChunks:0,staleChunks:0,lastErrorCode:error.code??'INDEX_UNAVAILABLE'})}}
+  const active=scope=>scope?.active&&life.current===scope
+  async function request(work,scope=life.current){if(!active(scope))throw new DOMException('Cancelled','AbortError');const controller=new AbortController();scope.controllers.add(controller);try{const value=await work(controller.signal);if(!active(scope))throw new DOMException('Cancelled','AbortError');return value}finally{scope.controllers.delete(controller)}}
+  useEffect(()=>{if(!visible)return;const scope={active:true,controllers:new Set(),readers:new Set()};life.current=scope;setBusy('');return()=>{scope.active=false;for(const controller of scope.controllers)controller.abort();for(const reader of scope.readers)reader.abort();fileToken.current++;previewToken.current++;indexToken.current++}},[client,visible,sessionId])
+  async function refreshIndex(scope=life.current){const token=++indexToken.current;try{const value=await request(signal=>client.indexState(signal),scope);if(token===indexToken.current)setIndex(value)}catch(error){if(active(scope)&&error.name!=='AbortError'&&token===indexToken.current)setIndex({readyChunks:0,staleChunks:0,lastErrorCode:error.code??'INDEX_UNAVAILABLE'})}}
   useEffect(()=>{if(visible)void refreshIndex()},[state,visible,client])
   useEffect(()=>{
     const token=++previewToken.current
@@ -25,16 +26,16 @@ export function DocumentPanel({client,state,visible,sessionId,blocked,documentRe
     }catch(error){if(scope.active&&token===fileToken.current&&error.name!=='AbortError')setFailure(error)}
   }
   async function submit(){
-    if(!draft||busy||blocked)return
+    if(!draft||busy||blocked||!active(life.current))return
     const scope=life.current,captured=draft;setBusy('import');setFailure(null);setNotice('')
     try{
-      const {baseRevision,...input}=captured,result=await request(signal=>client.importDocument({...input,expectedRevision:baseRevision},signal)),document=await request(signal=>client.document(result.documentId,result.version,signal))
+      const {baseRevision,...input}=captured,result=await request(signal=>client.importDocument({...input,expectedRevision:baseRevision},signal),scope),document=await request(signal=>client.document(result.documentId,result.version,signal),scope)
       await onImported(result)
-      if(scope.active){setPreview(document);setDraft(null);setNotice(`已导入 ${result.chunkCount} 个资料片段，尚未自动绑定故事。`)}
-    }catch(error){if(scope?.active&&error.name!=='AbortError')setFailure(error)}finally{if(scope?.active)setBusy('')}
+      if(active(scope)){setPreview(document);setDraft(null);setNotice(`已导入 ${result.chunkCount} 个资料片段，尚未自动绑定故事。`)}
+    }catch(error){if(active(scope)&&error.name!=='AbortError')setFailure(error)}finally{if(active(scope))setBusy('')}
   }
-  async function rebase(){const scope=life.current;setBusy('rebase');try{const next=await onRefresh();if(scope?.active&&next){setDraft(current=>current?{...current,baseRevision:next.revision}:current);setFailure(null)}}catch(error){if(scope?.active&&error.name!=='AbortError')setFailure(error)}finally{if(scope?.active)setBusy('')}}
-  async function rebuild(){const scope=life.current;setBusy('index');setFailure(null);try{const result=await request(signal=>client.rebuildIndex({},signal));await refreshIndex();if(scope.active)setNotice(result.diagnostics.length?result.diagnostics.map(item=>`${item.code} · ${item.message}`).join('；'):`已索引 ${result.indexedChunks} 项，复用 ${result.skippedChunks} 项。`)}catch(error){if(scope?.active&&error.name!=='AbortError')setFailure(error)}finally{if(scope?.active)setBusy('')}}
+  async function rebase(){const scope=life.current;if(!active(scope))return;setBusy('rebase');try{const next=await onRefresh();if(active(scope)&&next){setDraft(current=>current?{...current,baseRevision:next.revision}:current);setFailure(null)}}catch(error){if(active(scope)&&error.name!=='AbortError')setFailure(error)}finally{if(active(scope))setBusy('')}}
+  async function rebuild(){const scope=life.current;if(!active(scope))return;setBusy('index');setFailure(null);try{const result=await request(signal=>client.rebuildIndex({},signal),scope);await refreshIndex(scope);if(active(scope))setNotice(result.diagnostics.length?result.diagnostics.map(item=>`${item.code} · ${item.message}`).join('；'):`已索引 ${result.indexedChunks} 项，复用 ${result.skippedChunks} 项。`)}catch(error){if(active(scope)&&error.name!=='AbortError')setFailure(error)}finally{if(active(scope))setBusy('')}}
   const edited=preview&&selectedEntry?.provenance?.documentId===preview.document.id&&preview.extraction.chunks.some(chunk=>chunk.ref.chunkId===selectedEntry.provenance.chunkId&&chunk.text!==selectedEntry.content)
   return <section className="rpdb-documents" aria-label="资料与索引">
     <div className="rpdb-section-title"><h3>资料与索引</h3><span>TXT / MD / PDF</span></div>

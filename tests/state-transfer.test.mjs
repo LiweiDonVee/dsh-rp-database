@@ -1,10 +1,12 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import {mkdtemp,rm} from 'node:fs/promises'
+import {mkdtemp,readFile,rm} from 'node:fs/promises'
 import {join} from 'node:path'
 import {tmpdir} from 'node:os'
 import {createDatabaseHost} from '../src/host.mjs'
 import {hostFixture,stateSeeds,factRefs,turnEvents} from './fixtures/database-host.mjs'
+import {factCommit,fingerprint} from '../src/facts.mjs'
+import {validateCanonicalState} from '../src/state-transfer.mjs'
 
 async function fixture(t,{embedding=false}={}){
   const directory=await mkdtemp(join(tmpdir(),'rp-db-restore-')),f=hostFixture(),views=new Map(),stats={canonicalReads:0}
@@ -12,7 +14,7 @@ async function fixture(t,{embedding=false}={}){
   const service=await createDatabaseHost(f.ctx,{directory,...embedding?{embedding:{baseURL:'http://127.0.0.1:1/v1',model:'fixture',apiKey:'never-export'},providers:{embed:async texts=>texts.map(()=>[1,0])}}:{}})
   t.after(async()=>{await service.close();await rm(directory,{recursive:true,force:true})})
   const add=(id,parentSession)=>{const agent=id==='story'?f.agent:f.addAgent(id,parentSession);agent.session.header={id,...parentSession?{parentSession}:{}};agent.session.snapshotEvents=()=>views.get(id)?.events??[];return agent}
-  return{service,views,add,stats}
+  return{service,views,add,stats,directory}
 }
 const input=(revision,start,anchor,value)=>({turnKey:JSON.stringify(['story',start]),source:{assistantMessageId:anchor,callId:'reused-call',callSeq:start+3,turnStartSeq:start},expectedRevision:revision,operations:[{op:'update',ref:factRefs[1],patch:{content:JSON.stringify({schemaVersion:1,items:[{id:value,text:value}]})}}],summary:value,packet:{playerAction:value},kind:'turn'})
 async function source(t,{note=false}={}){
@@ -66,6 +68,40 @@ test('state restore rejects content collisions and forged native receipt sources
   const preflight=await to.service.preflightRestore(request)
   assert.equal(preflight.supported,false);assert.ok(preflight.conflicts.some(item=>item.code==='RESTORE_CONTENT_CONFLICT'))
   assert.equal((await to.service.contentRevision()).revision,1)
+})
+
+test('restore rejects a schema-invalid factual prefix even when a later fact batch is valid, without changing data or revision',async t=>{
+  const from=await source(t),to=await fixture(t),state=structuredClone(from.exported)
+  for(const[id,value]of from.views)to.views.set(id,structuredClone(value))
+  for(const record of state.payload.sessions){
+    record.changes[0].operations[0].patch.content=JSON.stringify({items:[{id:'invalid',text:'Missing schemaVersion'}]})
+    const item=record.receipts[0],r=item.receipt
+    const commit=factCommit({turnKey:r.turnKey,source:r.source,expectedRevision:0,operations:record.changes[0].operations,summary:r.summary,packet:r.packet,kind:r.kind},r.sessionId)
+    const {expectedRevision:_revision,...identity}=commit;item.fingerprint=fingerprint(identity)
+  }
+  await to.service.create({name:'Unrelated destination',expectedRevision:0})
+  const before=await readFile(join(to.directory,'state.json'),'utf8'),request={sessionIds:['story','child'],state}
+  assert.deepEqual(await to.service.preflightRestore(request),{supported:false,conflicts:[{code:'RESTORE_PAYLOAD_INVALID',id:'payload'}],requirements:[]})
+  assert.throws(()=>validateCanonicalState(state,to.views),{code:'RESTORE_PAYLOAD_INVALID'})
+  await assert.rejects(to.service.restoreState({...request,restoreId:'invalid-fact-schema',expectedRevision:1}),{code:'RESTORE_PAYLOAD_INVALID'})
+  assert.equal(to.stats.canonicalReads,0,'Preflight structural validation does not need destination logs')
+  assert.equal(await readFile(join(to.directory,'state.json'),'utf8'),before)
+  assert.equal((await to.service.contentRevision()).revision,1)
+})
+
+test('restore validates the final state of each atomic fact batch and keeps its original operations',async t=>{
+  const from=await fixture(t),to=await fixture(t),events=turnEvents()
+  from.views.set('story',{header:{id:'story'},events});const agent=from.add('story')
+  await from.service.bindSources({sessionId:'story',sources:[],expectedRevision:0,resetOverlay:false})
+  await from.service.initializeStoryState({sessionId:'story',entries:stateSeeds(),factEntryRefs:factRefs,launchId:'atomic-schema',expectedRevision:1})
+  const commit=input(2,1,'assistant-A','Final valid facts')
+  commit.operations.unshift({op:'update',ref:factRefs[1],patch:{content:'A temporary value replaced within the same atomic batch'}})
+  await(await from.service.factAccess({sessionId:'story',agent})).commit(commit)
+  const state=await from.service.exportState({sessionIds:['story']}),request={sessionIds:['story'],state}
+  assert.equal((await to.service.preflightRestore(request)).supported,true)
+  to.views.set('story',structuredClone(from.views.get('story')))
+  await to.service.restoreState({...request,restoreId:'atomic-valid-schema',expectedRevision:0})
+  assert.deepEqual((await to.service.exportState({sessionIds:['story']})).payload.sessions,state.payload.sessions)
 })
 test('a fork may drop temporary note operations while preserving the original factual receipt fingerprint for restore',async t=>{
   const from=await source(t,{note:true}),to=await fixture(t)

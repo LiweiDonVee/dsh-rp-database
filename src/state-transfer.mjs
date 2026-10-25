@@ -124,6 +124,12 @@ function validateEnvelope(value,ids){
     else if(record.binding.factEntryRefs.length)invalid('Fact registry has no initialization')
     record.receipts??=[];if(!Array.isArray(record.receipts))invalid('Invalid receipts');unique(record.receipts.map(item=>item.receipt?.id),'receipt IDs')
     const protectedKeys=new Set(record.binding.factEntryRefs.map(entryKey))
+    for(const change of record.changes){
+      const operations=change.operations.filter(operation=>operation.op!=='add'&&protectedKeys.has(entryKey(operation.ref)))
+      // Content patches replace the full JSON value. Check each atomic batch against the seed;
+      // do not flatten changes from distinct causal branches during structural preflight.
+      if(operations.length)validateFactState(applyScopedOperations(record.baseline,operations,{allowFacts:true}).entries,record.binding.factEntryRefs)
+    }
     for(const item of record.receipts){
       exact(item,['receipt','fingerprint']);const r=item.receipt
       exact(r,['schemaVersion','id','sessionId','turnKey','source','kind','databaseRevision','changeId','stateRefs','summary','packet','openingText','createdAt'])
@@ -149,7 +155,10 @@ export function validateCanonicalState(state,views){
     for(const note of record.baselineNotes)if(!assistants.has(note.anchor))invalid('Note anchor does not exist in the canonical destination')
     function projected(through,limit=record.changes.length){
       const prefix=projectSession({header:view.header,records:view.events.filter(event=>event.seq<=through)}),active=new Set(prefix.activeAnchors);let entries=record.baseline
-      for(const change of record.changes.slice(0,limit))if(active.has(change.anchor))entries=applyScopedOperations(entries,change.operations,{allowFacts:true,additionSourceKey:change.additionSourceKey??'@session'}).entries
+      for(const change of record.changes.slice(0,limit))if(active.has(change.anchor)){
+        entries=applyScopedOperations(entries,change.operations,{allowFacts:true,additionSourceKey:change.additionSourceKey??'@session'}).entries
+        validateFactState(entries,record.binding.factEntryRefs)
+      }
       return entries
     }
     try{
