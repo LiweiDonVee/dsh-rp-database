@@ -7,7 +7,7 @@ import {chromium} from '@playwright/test'
 const packageName="dsh-rp-database",root=process.cwd(),home=resolve('.runtime/'+packageName+'-smoke-'+Date.now()),evidence=resolve('.runtime/native-evidence')
 const artifact=resolve('artifacts/'+packageName+'-0.1.0.tgz')
 const artifactSHA256=createHash('sha256').update(await readFile(artifact)).digest('hex')
-const cli=process.env.DSH_BIN??join(process.env.LOCALAPPDATA??'','Programs/DeepSeek Harness/resources/runtime/cli/bin/dsh.cmd')
+const cli=process.env.DSH_BIN??(process.platform==='win32'?join(process.env.LOCALAPPDATA??'','Programs/DeepSeek Harness/resources/runtime/cli/bin/dsh.cmd'):'dsh')
 const quote=value=>process.platform==='win32'?'"'+value+'"':value
 const env={...process.env,DSH_HOME:home,DEEPSEEK_API_KEY:'native-smoke-placeholder-unused'}
 const redact=value=>String(value).replace(/([?&]token=)[^\s"'<>]+/gu,'$1[REDACTED]').replace(/(Bearer\s+)[\w.-]+/giu,'$1[REDACTED]')
