@@ -2,7 +2,13 @@
 
 ## 0.2.0 DB-B 资料、索引与传输检查点
 
-### T12/SK7 补充接口检查点 — 2026-10-26
+### 审查修复轮 2 / T13 — 2026-10-25
+
+Document.databaseId 按 ID-only 关联校验，移除 document owner 无条件加入首版本的遍历。仅明确请求 V2 时只导出 V2及真实 source/document，目标不同 V1 保留且不阻塞恢复；当前因果绑定明确需要 V1 时继续导出 V1+V2。未提供满足 owner ID 的明确版本则 EXPORT_REQUIREMENT_MISSING；库版本前检与最终完整闭包检查分开，允许 runtime/additional refs 共同满足关联，不猜首/最新版本。
+
+新增3项 T13 定向回归，`pnpm check` **103 runtime +24 UI**，lint/build 通过。新包的逆向版本选择/目标不同 V1/保留明确 V1 由实际 tgz 接口探测验证；本次没有重跑无关 native，历史 rc.3 证据仍按下面原 hash 归属。
+
+### T12/SK7 补充接口检查点 — 2026-10-25
 
 exportState 新增 optional additionalDatabaseRefs:[{databaseId,version}]，默认为 []。额外固定版本及其 source/document 闭包去重导出，保持 exact IDs 恢复；当前 sources:[] 与 GM seed 不变，不导出 latest/其他库，不跟随原 provenance 中的任意引用。缺失版本 EXPORT_REQUIREMENT_MISSING，不回退或写入。新旧默认调用一致，正常 refs/receipt/冲突语义保持。
 

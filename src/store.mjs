@@ -7,7 +7,7 @@ import {factCommit,fingerprint,storySeed,validateFactState} from './facts.mjs';
 import {contentPayload,publicSource} from './transfer.mjs';
 import {documentContent,validateChunkReferences} from './document-types.mjs';
 import {CHUNKING_VERSION,EXTRACTION_VERSION,chunkPages,textHash} from './documents.mjs';
-import {exportDatabaseState,restoreEnvelope,restoreConflicts,restoreTransport,sessionIds,validateCanonicalState} from './state-transfer.mjs';
+import {checkExportDatabaseRefs,exportDatabaseState,restoreEnvelope,restoreConflicts,restoreTransport,sessionIds,validateCanonicalState} from './state-transfer.mjs';
 
 // One writer queue per absolute directory, shared by every handle in this process.
 const queues = new Map();
@@ -158,6 +158,7 @@ export function createDatabaseStore({ directory }) {
     validateChunkReferences(database.entries,documents);return documents;
   }
   return {
+    checkExportDatabaseRefs(refs) {return read(state=>checkExportDatabaseRefs(state,refs));},
     exportState(input) {return read(state=>exportDatabaseState(state,sessionIds(input.sessionIds),input.additionalDatabaseRefs));},
     preflightRestore(input) {
       return read(state=>{

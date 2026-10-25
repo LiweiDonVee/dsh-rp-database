@@ -48,6 +48,8 @@ payload.storeSchemaVersion=2，含 databases[{id,versions}]、sources[]、docume
 
 T12 的 additionalDatabaseRefs 默认为 []，由 StoryKit 从所选固定 Character/template 的 typed 默认引用显式提供。导出这些精确库版本及其 source/document 依赖并去重，恢复时保留原 ID，作为 library-only 内容；不改变当前故事 sources、不自动绑定、不扫描任意 provenance 或导出整库的其他版本。例如 Character 默认 WorldV1、当前故事 sources:[] 时，WorldV1 仍可在恢复后供该资产默认值解析，当前故事继续使用空来源。显式版本缺失时返回 EXPORT_REQUIREMENT_MISSING，message 标明安全的 databaseId/version，不回退 latest、不写入源数据。
 
+T13：Document.databaseId 只关联库 ID；明确选择 V2 即满足该关联，不额外带入 V1、首版本或 latest。只请求 V2 时，目标相同库 ID 的无关 V1 差异不会因此新增冲突；当前绑定或其他明确 refs 确需 V1 时仍导出 V1，真实请求版本/source/document 的冲突仍拒绝。若文档 owner ID 没有任何明确选择的库版本，则 EXPORT_REQUIREMENT_MISSING，要求显式补充版本；不猜版本。
+
 T2 预检不要求目标 Session 存在，只检查 schema、内容/ID冲突与依赖。协调者先通过公共宿主 persistence 创建精确 headers/events、flush/close、cold validation；restoreState 再通过认证 owner reader 读取真实目标完整历史，核验实际 assistant anchors、真实 GM tool block/call/turn/start、祖先关系、因果政策和 stateRefs，最后在一个 Database 队列事务写入。原事实回执不能凭 JSON 声称为 canonical；不追加自定义事件或伪造 accepted history。
 
 同 restoreId/同 payload 与 Session 集合返回原结果，异 payload/集合 RESTORE_ID_CONFLICT。其他 restore job 不能覆盖已有故事；同 ID/version 内容仅在结构完全一致时复用，不同为 RESTORE_CONTENT_CONFLICT。格式错误 RESTORE_PAYLOAD_INVALID，缺失 canonical/content dependency 为 RESTORE_REQUIREMENT_MISSING；所有拒绝均不提交局部状态。既有无关库/故事/缓存保留。包导入的新 ID 与 SavedStory 的精确 ID 恢复是两种不同操作。

@@ -101,7 +101,7 @@ export async function createDatabaseHost(ctx,options={}){
     exportState:input=>run(input.signal,async signal=>{
       owner(input);const ids=sessionIds(input.sessionIds),views=new Map()
       // Reject missing passive dependencies before export can materialize a cold child's inheritance.
-      if(input.additionalDatabaseRefs!==undefined)await store.exportState({sessionIds:[],additionalDatabaseRefs:input.additionalDatabaseRefs})
+      if(input.additionalDatabaseRefs!==undefined)await store.checkExportDatabaseRefs(input.additionalDatabaseRefs)
       for(const id of ids){const view=await readOwner(id,signal);await ensure(view);views.set(id,view)}
       const exported=restoreEnvelope(await store.exportState({sessionIds:ids,additionalDatabaseRefs:input.additionalDatabaseRefs}),ids);validateCanonicalState(exported,views);return exported
     }),

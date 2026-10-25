@@ -33,6 +33,14 @@ function additionalDatabaseRefs(value=[]){
   if(!Array.isArray(value)||value.some(ref=>!object(ref)||Object.keys(ref).some(field=>!['databaseId','version'].includes(field))||!text(ref.databaseId)||!positive(ref.version)))throw new DatabaseError('INVALID_DATA','additionalDatabaseRefs must contain exact databaseId/version references')
   return value
 }
+function databaseVersion(state,id,version){
+  const pinned=state.databases[key(id)]?.versions.find(value=>value.database.version===version)
+  if(!pinned)throw new DatabaseError('EXPORT_REQUIREMENT_MISSING','Missing pinned database reference '+JSON.stringify({databaseId:id,version}))
+  return pinned
+}
+export function checkExportDatabaseRefs(state,value){
+  const refs=additionalDatabaseRefs(value);for(const ref of refs)databaseVersion(state,ref.databaseId,ref.version);return refs
+}
 
 /** Select dependency versions only; derived vectors and operation journals are never exported. */
 export function exportDatabaseState(state,ids,additionalRefs){
@@ -40,8 +48,7 @@ export function exportDatabaseState(state,ids,additionalRefs){
   const databases=new Map(),sources=new Map(),documents=new Map(),sessions=ids.map(id=>state.sessions[key(id)]).filter(Boolean)
   function source(id){if(!id)return;const value=state.sources[key(id)];if(!value)requireContent('An immutable source is missing');sources.set(id,value)}
   function database(id,version){
-    const record=state.databases[key(id)],pinned=record?.versions.find(value=>value.database.version===version)
-    if(!pinned)throw new DatabaseError('EXPORT_REQUIREMENT_MISSING','Missing pinned database reference '+JSON.stringify({databaseId:id,version}))
+    const pinned=databaseVersion(state,id,version)
     let selected=databases.get(id);if(!selected){selected=new Map();databases.set(id,selected)}if(selected.has(version))return;selected.set(version,pinned)
     source(pinned.sourceId)
     for(const ref of pinned.documentRefs??[])document(ref.documentId,ref.version)
@@ -51,8 +58,6 @@ export function exportDatabaseState(state,ids,additionalRefs){
     const pinned=state.documents?.[key(id)]?.versions.find(value=>value.document.version===version)
     if(!pinned)requireContent('A referenced document version is missing')
     let selected=documents.get(id);if(!selected){selected=new Map();documents.set(id,selected)}if(selected.has(version))return;selected.set(version,pinned)
-    const owner=state.databases[key(pinned.document.databaseId)]?.versions[0]
-    if(!owner)requireContent('A document library dependency is missing');database(pinned.document.databaseId,owner.database.version)
   }
   for(const ref of requested)database(ref.databaseId,ref.version)
   for(const record of sessions){
@@ -61,6 +66,8 @@ export function exportDatabaseState(state,ids,additionalRefs){
     for(const entry of record.baseline)if(entry.provenance)document(entry.provenance.documentId,entry.provenance.documentVersion)
     for(const item of record.receipts??[])if(!ids.includes(item.receipt.sessionId))requireContent('Include the receipt origin ancestor in sessionIds')
   }
+  // Document ownership names an ID, not a version. All explicit runtime/passive refs are now selected.
+  for(const versions of documents.values())for(const item of versions.values())if(!databases.has(item.document.databaseId))throw new DatabaseError('EXPORT_REQUIREMENT_MISSING','A document owner requires an explicit database version '+JSON.stringify({databaseId:item.document.databaseId,documentId:item.document.id,documentVersion:item.document.version}))
   return structuredClone({schemaVersion:1,revision:state.revision,payload:{storeSchemaVersion:2,databases:[...databases].map(([id,versions])=>({id,versions:[...versions.values()].sort((a,b)=>a.database.version-b.database.version)})),sources:[...sources.values()],documents:[...documents].map(([id,versions])=>({id,versions:[...versions.values()].sort((a,b)=>a.document.version-b.document.version)})),sessions}})
 }
 
