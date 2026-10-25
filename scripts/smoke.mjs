@@ -5,7 +5,7 @@ import {resolve,join} from 'node:path'
 import {chromium} from '@playwright/test'
 
 const packageName="dsh-rp-database",root=process.cwd(),home=resolve('.runtime/'+packageName+'-smoke-'+Date.now()),evidence=resolve('.runtime/native-evidence')
-const artifact=resolve('artifacts/'+packageName+'-0.1.0.tgz')
+const artifact=resolve('artifacts/'+packageName+'-0.1.1.tgz')
 const artifactSHA256=createHash('sha256').update(await readFile(artifact)).digest('hex')
 const cli=process.env.DSH_BIN??(process.platform==='win32'?join(process.env.LOCALAPPDATA??'','Programs/DeepSeek Harness/resources/runtime/cli/bin/dsh.cmd'):'dsh')
 const quote=value=>process.platform==='win32'?'"'+value+'"':value
@@ -50,9 +50,10 @@ try{
  let state=await api('state')
  await api('create',{name:'空白验收数据库',expectedRevision:state.revision})
  state=await api('state');assert(state.databases.length===1,'Owner create did not persist')
- const raw=JSON.stringify({name:'合成数据库',entries:[{id:'locked',title:'固定门锁',content:'锁不允许改动。'},{id:'required',title:'必须存在的规则',content:'门是否打开以既定结算为准。'},{id:'disabled',title:'禁用秘密',content:'DISABLED_CANARY'},{id:'open',title:'门状态',content:'来源中的门仍半开。'}],extensions:{script:'window.__sourceExecuted=true'}},null,2)
+ const raw='\uFEFF'+JSON.stringify({name:'合成数据库',entries:{locked:{uid:'locked',comment:'固定门锁',key:['门锁'],content:'锁不允许改动。'},required:{uid:'required',comment:'必须存在的规则',content:'门是否打开以既定结算为准。',constant:true},disabled:{uid:'disabled',comment:'禁用秘密',content:'DISABLED_CANARY',disable:true},open:{uid:'open',comment:'门状态',key:['门'],content:'来源中的门仍半开。',probability:35,useProbability:true}},extensions:{script:'window.__sourceExecuted=true'}},null,2)+'\r\n'
  const imported=await api('import',{rawText:raw,name:'合成数据库',expectedRevision:state.revision})
  const loaded=await api('database',{databaseId:imported.databaseId,version:imported.version}),database=loaded.database
+ assert(imported.diagnostics.some(item=>item.code==='ST_PROBABILITY')&&loaded.importReport.diagnostics.some(item=>item.code==='ST_PROBABILITY'),'ST unsupported behavior was not reported or persisted')
  database.entries.find(row=>row.id==='locked').readOnly=true
  database.entries.find(row=>row.id==='required').mode='required'
  database.entries.find(row=>row.id==='disabled').mode='disabled'
@@ -72,7 +73,11 @@ try{
  assert(!isolated.entries.some(row=>row.id==='local')&&isolated.entries.find(row=>row.id==='open').content==='来源中的门仍半开。','Story overlay leaked into second story')
  const source=await api('source',{sourceId:imported.sourceId}),unchanged=await api('database',{databaseId:saved.databaseId,version:saved.version})
  assert(source.source.rawText===raw&&unchanged.database.entries.find(row=>row.id==='open').content==='来源中的门仍半开。','Source changed through story tool')
- const checks={ownerCreate:true,ownerImport:true,readOnly:true,required:true,disabledCatalogAndRead:true,nativePatch:true,storyIsolation:true,sourceExact:true}
+ state=await api('state')
+ const cardRaw=JSON.stringify({spec:'chara_card_v3',spec_version:'3.0',data:{name:'合成角色',system_prompt:'CARD_INSTRUCTIONS_NOT_DATABASE',character_book:{name:'内嵌验收世界书',entries:[{id:0,keys:['旧信'],content:'只提取世界资料。',enabled:true},{keys:['停用'],content:'关闭项',enabled:false}]}}})
+ const embedded=await api('import',{rawText:cardRaw,expectedRevision:state.revision}),embeddedData=await api('database',{databaseId:embedded.databaseId,version:embedded.version})
+ assert(embeddedData.database.name==='内嵌验收世界书'&&embeddedData.database.entries[0].id==='0'&&embeddedData.database.entries[1].mode==='disabled'&&!JSON.stringify(embeddedData.database).includes('CARD_INSTRUCTIONS_NOT_DATABASE'),'Embedded V3 book import failed')
+ const checks={ownerCreate:true,ownerImport:true,stWorldbookMap:true,embeddedCharacterBook:true,unsupportedBehaviorReported:true,readOnly:true,required:true,disabledCatalogAndRead:true,nativePatch:true,storyIsolation:true,sourceExact:true}
 
  stage='native-ui'
  await page.evaluate(id=>window.__workspaceCtx.get('uiWorkspace').openSession(id),sessionId)
@@ -83,8 +88,9 @@ try{
  await page.getByRole('textbox',{name:'条目正文',exact:true}).waitFor()
  assert(await page.getByRole('checkbox',{name:'Agent 只读',exact:true}).isChecked(),'Native editor does not show human read-only policy')
  await page.getByRole('button',{name:'查看只读原件',exact:true}).click()
- assert(await page.getByRole('textbox',{name:'原始 JSON（只读）',exact:true}).inputValue()===raw,'Native original viewer changed source')
+ assert(await page.getByRole('textbox',{name:'原始 JSON（只读）',exact:true}).inputValue()===raw.replaceAll('\r\n','\n'),'Native original viewer changed source beyond browser textarea newline normalization')
  assert(!await page.evaluate(()=>window.__sourceExecuted),'Imported source script executed')
+ assert((await panel.innerText()).includes('概率激活只保留来源'),'Native UI did not restore the selected import report')
 
  await page.screenshot({path:join(evidence,'native-sidebar.png')})
  const layoutMetrics=[]

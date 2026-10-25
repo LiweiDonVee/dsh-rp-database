@@ -1,0 +1,26 @@
+{
+  "name": "海港资料示例",
+  "entries": {
+    "0": {
+      "uid": 0,
+      "comment": "港口的灯塔",
+      "key": ["灯塔", "海港"],
+      "keysecondary": [],
+      "content": "旧灯塔位于北岸，门锁的实际状态以本轮已确认结果为准。",
+      "constant": true,
+      "disable": false,
+      "displayIndex": 0,
+      "order": 100,
+      "position": 0
+    },
+    "1": {
+      "uid": 1,
+      "comment": "尚未启用的旧稿",
+      "key": ["旧稿"],
+      "content": "本条默认禁用，不作为当前故事资料。",
+      "constant": false,
+      "disable": true,
+      "displayIndex": 1
+    }
+  }
+}

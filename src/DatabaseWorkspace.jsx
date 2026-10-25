@@ -67,10 +67,11 @@ function SessionWorkspace({sessionId, visible, client}) {
   const attempted = useRef(false)
   const valid = (scope, sequence) => scope?.active && lifecycle.current === scope && (sequence === undefined || selection.current === sequence)
 
-  const acceptDraft = useCallback((database,baseRevision,sourceId) => {
+  const acceptDraft = useCallback((database,baseRevision,sourceId,report) => {
     const next = {database:clone(database),baseRevision,sourceId,dirty:false}
     draftRef.current=next;setDraft(next);setEntryId(database.entries[0]?.id ?? null)
     setSource(null);setSourceBusy(false);setPending(null);setConflict('');setError('')
+    setDiagnostics(report?.diagnostics ?? [])
   },[])
 
   const refresh = useCallback(scope => {
@@ -119,7 +120,7 @@ function SessionWorkspace({sessionId, visible, client}) {
       if (!scope.active || selection.current!==sequence) return
       if (result.database?.id!==id || !positive(result.database.version) || !Array.isArray(result.database.entries) || !revision(result.revision)) throw new Error('数据库版本响应不完整，请重新载入。')
       const metadata=stateRef.current?.databases.find(item=>item.id===id)
-      acceptDraft(result.database,result.revision,metadata?.sourceId)
+      acceptDraft(result.database,result.revision,metadata?.sourceId,result.importReport)
     } catch (failure) {if(scope.active && selection.current===sequence && failure.name!=='AbortError')setError(failure.message)}
     finally {if(scope.active && selection.current===sequence)setBusy('')}
   },[acceptDraft,client])
@@ -162,7 +163,7 @@ function SessionWorkspace({sessionId, visible, client}) {
     const saved=await request(scope,signal=>client.database(result.databaseId,result.version,signal))
     if(!valid(scope,sequence))return false
     if(saved.database?.id!==result.databaseId || saved.database.version!==result.version || !Array.isArray(saved.database.entries))throw new Error('版本已写入，但读取失败；请重新载入数据库核对。')
-    acceptDraft(saved.database,result.revision,result.sourceId ?? (draftRef.current?.database.id===result.databaseId?draftRef.current.sourceId:undefined))
+    acceptDraft(saved.database,result.revision,result.sourceId ?? (draftRef.current?.database.id===result.databaseId?draftRef.current.sourceId:undefined),saved.importReport)
     return true
   }
   function save() {

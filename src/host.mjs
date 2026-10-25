@@ -64,7 +64,11 @@ export async function createDatabaseHost(ctx,options={}){
       if(input.sessionId){const view=await scope(input,signal);await ensure(view);if(bindings.has(view.sessionId))binding=await store.session(view.sessionId,{activeAnchors:view.activeAnchors,...view.currentAnchor?{currentAnchor:view.currentAnchor}:{}})}
       return{...await store.snapshot(),binding,retrieval:{embedding:{configured:!!(configured.embed??options.providers?.embed),model:options.embedding?.model??null},reranking:{configured:!!(configured.rerank??options.providers?.rerank),model:options.reranking?.model??null}}}
     })},
-    database:input=>run(input.signal,async()=>({revision:(await store.snapshot()).revision,database:await store.database(input.databaseId,input.version)})),
+    database:input=>run(input.signal,async()=>{
+      const snapshot=await store.snapshot(),database=await store.database(input.databaseId,input.version),sourceId=snapshot.databases.find(item=>item.id===database.id)?.sourceId
+      const source=sourceId?await store.source(sourceId):null
+      return{revision:snapshot.revision,database,...source?.importReport?{importReport:source.importReport}:{}}
+    }),
     source:input=>run(input.signal,async()=>({source:await store.source(input.sourceId)})),
     create:input=>run(input.signal,async()=>{const result=await store.saveDatabase({id:randomUUID(),name:input.name,version:1,entries:[]},{expectedRevision:input.expectedRevision});await sync();changed();return result}),
     import:input=>run(input.signal,async()=>{const result=await store.importSource(input.rawText,input);await sync();changed();return result}),
