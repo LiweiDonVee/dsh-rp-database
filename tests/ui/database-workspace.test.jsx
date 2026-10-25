@@ -36,6 +36,7 @@ function fixture({empty=false}={}) {
       dbs.set(db.id,db);versions.set('db-new:1',db);state.revision++
       result={revision:state.revision,databaseId:db.id,version:1,sourceId:'source-a',diagnostics:[]}
     }else if(input.action==='save'){
+      if(input.expectedRevision!==state.revision)return new Response(JSON.stringify({error:{code:'REVISION_CONFLICT',message:'版本冲突'}}),{status:409})
       const db={...clone(input.database),version:input.database.version+1};state.revision++
       dbs.set(db.id,db);versions.set(`${db.id}:${db.version}`,db)
       result={revision:state.revision,databaseId:db.id,version:db.version,sourceId:'source-a'}
@@ -99,6 +100,13 @@ describe('native database workspace',()=>{
     expect(screen.getByLabelText('条目正文')).toHaveValue('本地未保存')
     click('重新载入数据库')
     await waitFor(()=>expect(screen.getByLabelText('条目正文')).toHaveValue('远端正文'))
+  })
+  it('can edit and save immediately after its own successful bind without a false revision conflict',async()=>{
+    const f=fixture();await ready(f)
+    click('应用到当前故事');await screen.findByText(/已应用 v1/)
+    fireEvent.change(screen.getByLabelText('条目正文'),{target:{value:'应用后继续编辑'}})
+    click('保存新版本');await screen.findByText(/已保存 v2/)
+    expect(f.calls.find(call=>call.input.action==='save').input.expectedRevision).toBe(4)
   })
   it('does not announce save success while the response is pending',async()=>{
     const f=fixture();await ready(f);const hold=deferred();f.overrides.save=()=>hold.promise

@@ -55,7 +55,7 @@ export function validateDatabase(value) {
 export function importDatabase(rawText, { name } = {}) {
   string(rawText, 'Source');
   let parsed;
-  try { parsed = JSON.parse(rawText); } catch { fail('INVALID_JSON', 'Source must contain valid JSON'); }
+  try { parsed = JSON.parse(rawText.replace(/^\uFEFF/u,'')); } catch { fail('INVALID_JSON', 'Source must contain valid JSON'); }
   if (!record(parsed)) fail('INVALID_DATA', 'Source must contain an object');
   let entries;
   let format;

@@ -1,4 +1,11 @@
 import test from 'node:test';
+import {importDatabase} from '../src/core.mjs';
+
+test('UTF-8 BOM is ignored only for parsing and remains part of the immutable source',()=>{
+  const raw='\uFEFF{"name":"UTF8","entries":[]}\r\n';
+  const result=importDatabase(raw);
+  assert.equal(result.source.rawText,raw);
+});
 import assert from 'node:assert/strict';
 
 const entry = (extra = {}) => ({ id: 'a', title: 'Alice', content: 'A secret', keywords: [], tags: [], notes: '', readOnly: false, mode: 'auto', version: 1, ...extra });

@@ -224,6 +224,9 @@ function SessionWorkspace({sessionId, visible, client}) {
       if(!valid(scope,sequence))return
       if(!revision(result.revision) || result.databaseId!==captured.database.id || result.version!==captured.database.version || !result.session)throw new Error('应用响应不完整，请刷新当前故事核对。')
       scope.minimum=Math.max(scope.minimum,result.revision)
+      if(draftRef.current===captured && !captured.dirty){
+        const next={...captured,baseRevision:result.revision};draftRef.current=next;setDraft(next)
+      }
       setNotice(`已应用 v${result.version} 到当前故事。`);await refresh(scope)
     })
   }
