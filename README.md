@@ -6,17 +6,17 @@
 
 ## 安装
 
-0.2.0 要求官方 DSH 0.2.1-rc.3 或后续受支持的 0.2.x，Node24。旧 0.1.1 在 rc.2 的历史验收仍保留；新版本不宣称已验过 rc.2。使用构建或正式 Release 的 `dsh-rp-database-0.2.0.tgz`，完全退出 DSH 后执行，再重启：
+0.3.0 要求官方 DSH 0.2.1-rc.3 或后续受支持的 0.2.x，Node24。旧 0.1.1 在 rc.2 的历史验收仍保留；新版本不宣称已验过 rc.2。使用构建或正式 Release 的 `dsh-rp-database-0.3.0.tgz`，完全退出 DSH 后执行，再重启：
 
 ```powershell
-dsh plugin --profile desktop add ./dsh-rp-database-0.2.0.tgz
+dsh plugin --profile desktop add ./dsh-rp-database-0.3.0.tgz
 ```
 
 Web 模式将 desktop 改为 web。点击会话顶部 **数据库** 或右侧新增页签中的 **故事数据库**。Windows 找不到 dsh 时可使用默认官方启动器：
 
 ```powershell
 $dshCli = Join-Path $env:LOCALAPPDATA 'Programs/DeepSeek Harness/resources/runtime/cli/bin/dsh.cmd'
-& $dshCli plugin --profile desktop add ./dsh-rp-database-0.2.0.tgz
+& $dshCli plugin --profile desktop add ./dsh-rp-database-0.3.0.tgz
 ```
 
 ## 使用
@@ -71,6 +71,8 @@ $dshCli = Join-Path $env:LOCALAPPDATA 'Programs/DeepSeek Harness/resources/runti
 绑定会话获得 `rp_db_catalog`、`rp_db_read`、`rp_db_search`、`rp_db_patch`，工具只处理实际调用 Agent 的会话。工具保持 entryIds/operations[].id 字段，值使用目录给出的 entryKey；旧单来源 legacy 槽位可继续使用无歧义裸 ID。修改要求当前 revision；一个批次全部通过才提交。来源数据库 ID 和版本不由模型改动。
 
 可选服务 `ctx.get('rpDatabase')` 的 apiVersion 为 2，新增 bindSources、effectiveV2/catalogV2/readV2/searchV2/patchV2、initializeStoryState、factAccess 和 materialAccess。typed v2 使用 `{sourceKey,entryId}`，材料 facade.version 为 2，planner 使用 entryKey。旧单来源服务保留，多来源调用须显式使用资格引用。[精确 API、事实回执和合成示例](docs/api-v2.md)。
+
+0.3.0 增加 `capabilities.factReview=1`：GM 可保存待审事实候选、冻结回合前状态与工具证据，并在真实 owner 审批命令成功后原子选择新事实版本。候选和审批 intent 都不写世界；重新生成只修订 scene/facts，原先允许的工作资料操作只在首接受时执行一次。旧事实和候选保留审计，缺少原始基线的旧回执不能重新生成事实。审批界面、开关及模型调用由 GM 提供；Database 不运行模型，也不改写原生日志。
 
 资料 API 提供 importDocument/document/indexState/rebuildIndex。内容包 provider 提供 contentRevision/exportContent/importContent，创建新库与文档 ID、返回幂等 mapping，保留原件审计。SavedStory provider 提供 exportState/preflightRestore/restoreState：保留精确 ID、固定版本、因果覆盖和回执；预检不要求目标 Session 已存在，实际恢复必须在宿主导入并冷验证日志后核验真实引用。既有无关内容不覆盖，向量 cache 不进传输包。完整故事保存/恢复由 StoryKit 协调，Database 单独恢复自己的状态不等于整包恢复。[资料与传输接口](docs/documents-transfer.md)。
 

@@ -4,6 +4,8 @@ import { join, resolve } from 'node:path';
 import { DatabaseError, importDatabase, validateDatabase } from './core.mjs';
 import {applyScopedOperations,entryKey,legacySnapshot,sourceBindings} from './references.mjs';
 import {factCommit,fingerprint,storySeed,validateFactState} from './facts.mjs';
+import {candidateVisible,changeVisible,checkPreconditions,decisionApplied,decisionView,generationConfirmed,initialCandidate,reviewRoundView,worldState,originActive,preconditions,receiptVisible,runVisible} from './fact-review.mjs';
+import {createFactReviewStorage} from './fact-review-storage.mjs';
 import {contentPayload,publicSource} from './transfer.mjs';
 import {documentContent,validateChunkReferences} from './document-types.mjs';
 import {CHUNKING_VERSION,EXTRACTION_VERSION,chunkPages,textHash} from './documents.mjs';
@@ -13,6 +15,7 @@ import {checkExportDatabaseRefs,exportDatabaseState,restoreEnvelope,restoreConfl
 const queues = new Map();
 const hash = value => createHash('sha256').update(value, 'utf8').digest('hex');
 const error = (code, message, status = 400) => { throw new DatabaseError(code, message, status); };
+const receiptOrder=(left,right)=>left.receipt.source.turnStartSeq-right.receipt.source.turnStartSeq||(left.receipt.factRevision??0)-(right.receipt.factRevision??0)||left.receipt.databaseRevision-right.receipt.databaseRevision;
 function identifier(value, label) {
   if (typeof value !== 'string' || !value.trim()) error('INVALID_DATA', `${label} must be a nonempty string`);
   return value;
@@ -105,11 +108,11 @@ export function createDatabaseStore({ directory }) {
     if (!record) error('NOT_FOUND', 'Session database is not bound', 404);
     return record;
   }
-  function project(record, { activeAnchors, currentAnchor } = {}) {
+  function project(record, { activeAnchors, currentAnchor,view } = {}) {
     const active = anchorSet(activeAnchors);
     if (currentAnchor !== undefined) identifier(currentAnchor, 'Current anchor');
     let entries = structuredClone(record.baseline);
-    const changes = record.changes.filter(change => active === undefined || active.has(change.anchor));
+    const changes = record.changes.filter(change => (active === undefined || active.has(change.anchor))&&changeVisible(record,change,view));
     const notes = (record.baselineNotes ?? []).filter(note => note.anchor === currentAnchor && (active === undefined || active.has(note.anchor)));
     for (const change of changes) {
       let applied;
@@ -123,9 +126,9 @@ export function createDatabaseStore({ directory }) {
     entries.sort((left,right)=>(order.get(left.ref.sourceKey) ?? order.size)-(order.get(right.ref.sourceKey) ?? order.size));
     return {binding:structuredClone(record.binding),entries,notes,changes};
   }
-  function applyChange(record, operations, {anchor,activeAnchors,currentAnchor,additionSourceKey='@session',allowFacts=false}) {
+  function applyChange(record, operations, {anchor,activeAnchors,currentAnchor,view,additionSourceKey='@session',allowFacts=false}) {
     if (typeof anchor !== 'string' || !anchor.trim()) error('INVALID_ANCHOR', 'Agent mutations require an explicit canonical anchor');
-    const effective = project(record,{activeAnchors,currentAnchor});
+    const effective = project(record,{activeAnchors,currentAnchor,view});
     if (!Array.isArray(operations)) error('INVALID_OPERATION', 'Operations must be an array');
     const reserved = new Set(record.reservedKeys);
     for (const operation of operations) if (operation?.op === 'add' && reserved.has(entryKey({sourceKey:additionSourceKey,entryId:operation.entry?.id}))) error('DUPLICATE_ID','Entry ID is already inherited or used');
@@ -136,14 +139,46 @@ export function createDatabaseStore({ directory }) {
     for (const operation of operations) if (operation.op === 'add') reserved.add(entryKey({sourceKey:additionSourceKey,entryId:operation.entry.id}));
     record.reservedKeys = [...reserved];
     const nextActive = activeAnchors === undefined ? undefined : [...new Set([...activeAnchors,anchor])];
-    return {session:project(record,{activeAnchors:nextActive,currentAnchor:currentAnchor ?? anchor}),entries:applied.entries,changeId:change.id};
+    return {session:project(record,{activeAnchors:nextActive,currentAnchor:currentAnchor ?? anchor,view}),entries:applied.entries,changeId:change.id};
   }
   function projectedReceipt(receipt,sessionId) {
     return {...receipt,...receipt.sessionId === sessionId ? {} : {sessionId,originSessionId:receipt.sessionId}};
   }
-  function activeReceipt(item,activeAnchors) {
+  function activeReceipt(item,activeAnchors,record,view) {
     const active=anchorSet(activeAnchors);
-    return !active || active.has(item.receipt.source.assistantMessageId);
+    return (!active || active.has(item.receipt.source.assistantMessageId))&&(!record||receiptVisible(record,item,view));
+  }
+  function factReview(record,sessionId,options={}) {
+    const receipts=(record.receipts??[]).filter(item=>activeReceipt(item,options.activeAnchors,record,options.view));
+    const view=options.view??{events:[],activeAnchors:options.activeAnchors??[]};
+    const rounds=(record.factRounds??[]).map(round=>reviewRoundView(record,round,sessionId,view,receipts));
+    const activeRoundIds=new Set(rounds.filter(round=>originActive(round,view)).map(round=>round.roundId));
+    const decisions=(record.factDecisions??[]).filter(decision=>activeRoundIds.has(decision.roundId)&&(decision.request.sessionId===sessionId||decisionApplied(record,decision,view))).map(decision=>decisionView(record,decision,view,liveAttempts)).filter(Boolean);
+    const eligible=rounds.filter(round=>round.blockCode!=='INACTIVE_SOURCE'&&(round.activeReceiptId||round.pendingCandidateId));
+    const latest=eligible.sort((a,b)=>a.source.turnStartSeq-b.source.turnStartSeq).at(-1);
+    const latestReceipt=receipts.filter(item=>item.receipt.kind==='turn').sort(receiptOrder).at(-1)?.receipt;
+    const latestId=latest&&(!latestReceipt||latest.source.turnStartSeq>=latestReceipt.source.turnStartSeq)?latest.roundId:null;
+    for(const round of rounds){
+      round.latest=round.roundId===latestId;round.canRegenerate=round.latest;
+      if(!round.latest&&!round.blockCode)round.blockCode='FACT_ROUND_NOT_LATEST';
+      if(round.latest){
+        const stored=record.factRounds.find(value=>value.roundId===round.roundId),conditions=round.activeReceiptId?stored.receiptPreconditions?.[round.activeReceiptId]:stored.writePreconditions;
+        try{if(!conditions)error('LEGACY_BASELINE_UNAVAILABLE','This round has no reliable write preconditions',409);checkPreconditions(project(record,options).entries,conditions);}
+        catch(error){round.canRegenerate=false;round.blockCode=error.code;}
+        if(decisions.some(decision=>decision.roundId===round.roundId&&decision.status!=='applied'&&record.factDecisions.find(stored=>stored.operationId===decision.operationId)?.status!=='failed')){round.canRegenerate=false;round.blockCode='FACT_REVIEW_PENDING';}
+      }
+    }
+    const groups=rounds.filter(round=>round.blockCode!=='INACTIVE_SOURCE').map(round=>({roundId:round.roundId,source:round.source,activeReceiptId:round.activeReceiptId,factRevision:receipts.find(item=>item.receipt.id===round.activeReceiptId)?.receipt.factRevision??null,pendingCandidateId:round.pendingCandidateId}));
+    return{rounds,decisions,projection:{schemaVersion:1,latestRoundId:latestId,groups}};
+  }
+  function pendingReview(record,options) {
+    const state=factReview(record,record.id,options);
+    return state.rounds.some(round=>round.blockCode!=='INACTIVE_SOURCE'&&round.pendingCandidateId)||state.decisions.some(decision=>decision.status!=='applied'&&record.factDecisions.find(stored=>stored.operationId===decision.operationId)?.status!=='failed');
+  }
+  function createRound(record,sessionId,normalized,options,{proposal=false}={}) {
+    const effective=project(record,options),candidate=initialCandidate(record,effective.entries,normalized),roundId=randomUUID(),id=randomUUID(),createdAt=new Date().toISOString();
+    const round={roundId,version:1,sessionId,turnKey:normalized.turnKey,source:normalized.source,base:worldState(effective.entries,record.binding.factEntryRefs),baseChangeIds:effective.changes.map(change=>change.id),capture:normalized.capture,candidates:[{id,roundId,createdAt,origin:'main-gm',payload:candidate.payload,payloadHash:fingerprint(candidate.payload)}],pendingCandidateId:proposal?id:null,approvalRequired:proposal,initialApprovalRequired:proposal,fixedOperations:candidate.fixedOperations,writePreconditions:candidate.writePreconditions,initialFingerprint:fingerprint((({expectedRevision:_revision,...content})=>content)(normalized)),initialRequest:normalized};
+    record.factReviewVersion=1;(record.factRounds??=[]).push(round);return round;
   }
   function pinnedDocument(state,id,version) {
     const versions=state.documents?.[hash(identifier(id,'Document ID'))]?.versions;
@@ -157,7 +192,17 @@ export function createDatabaseStore({ directory }) {
     const documents=[...refs.values()].map(ref=>{const value=pinnedDocument(state,ref.documentId,ref.version);return{document:value.document,extraction:value.extraction};});
     validateChunkReferences(database.entries,documents);return documents;
   }
+  const liveAttempts=new Set();
+  const reviewStorage=createFactReviewStorage({read,sessionRecord,project,applyChange,review:factReview,projectedReceipt,liveAttempts,write:(sessionId,action)=>serial(async()=>{
+    const state=await readState(),result=action(sessionRecord(state,sessionId),state);
+    if(result.changed!==false){state.revision++;await writeState(state);}
+    return structuredClone(result.value);
+  })});
   return {
+    stageFactCandidate:(input,options)=>reviewStorage.stage(input,options),
+    recordFactDecision:(input,options)=>reviewStorage.record(input,options),
+    finalizeFactDecision:(input,options)=>reviewStorage.finalize(input,options),
+    factDecision:(sessionId,operationId,options)=>reviewStorage.decision(sessionId,operationId,options),
     checkExportDatabaseRefs(refs) {return read(state=>checkExportDatabaseRefs(state,refs));},
     exportState(input) {return read(state=>exportDatabaseState(state,sessionIds(input.sessionIds),input.additionalDatabaseRefs));},
     preflightRestore(input) {
@@ -381,19 +426,40 @@ export function createDatabaseStore({ directory }) {
         return initialized.result;
       });
     },
-    async commitFacts(sessionId,input,{activeAnchors,currentAnchor}={}) {
+    factReviewState(sessionId,options) {return read(state=>({databaseRevision:state.revision,...factReview(sessionRecord(state,sessionId),sessionId,options)}));},
+    async proposeFacts(sessionId,input,options={}) {
+      const normalized=factCommit(input,sessionId),{expectedRevision,...content}=normalized,digest=fingerprint(content);
+      if(normalized.kind!=='turn'||!normalized.capture)error('INVALID_FACT_CAPTURE','A pending ordinary fact turn requires a captured baseline');
+      const result=await mutate(expectedRevision,state=>{
+        const record=sessionRecord(state,sessionId);
+        if(!record.initialization)error('STORY_NOT_INITIALIZED','Initialize the story before proposing facts',409);
+        if(pendingReview(record,options))error('FACT_REVIEW_PENDING','Resolve the pending fact review before starting another turn',409);
+        const round=createRound(record,sessionId,normalized,options,{proposal:true});
+        return{round:factReview(record,sessionId,options).rounds.find(value=>value.roundId===round.roundId),candidateId:round.candidates[0].id};
+      },state=>{
+        const record=sessionRecord(state,sessionId),round=(record.factRounds??[]).find(round=>round.source.turnStartSeq===normalized.source.turnStartSeq&&originActive(round,options.view));
+        if(!round)return undefined;
+        if(round.initialFingerprint!==digest)error('TURN_ALREADY_COMMITTED','This turn already owns a different candidate',409);
+        return{round:factReview(record,sessionId,options).rounds.find(value=>value.roundId===round.roundId),candidateId:round.candidates[0].id};
+      });
+      const{revision:_revision,...proposal}=result;return proposal;
+    },
+    async commitFacts(sessionId,input,{activeAnchors,currentAnchor,view}={}) {
       const normalized=factCommit(input,sessionId),{expectedRevision,...content}=normalized,digest=fingerprint(content);
       const result=await mutate(expectedRevision,state => {
         const record=sessionRecord(state,sessionId);
         if (!record.initialization) error('STORY_NOT_INITIALIZED','Initialize the GM story state before committing facts',409);
+        if(pendingReview(record,{activeAnchors,currentAnchor,view}))error('FACT_REVIEW_PENDING','Resolve the pending fact review before committing another fact turn',409);
+        const round=normalized.capture&&normalized.kind==='turn'?createRound(record,sessionId,normalized,{activeAnchors,currentAnchor,view}):null;
         const anchor=normalized.source.assistantMessageId;
-        const applied=normalized.operations.length ? applyChange(record,normalized.operations,{anchor,activeAnchors,currentAnchor,allowFacts:true}) : {session:project(record,{activeAnchors,currentAnchor}),changeId:null};
+        const applied=normalized.operations.length ? applyChange(record,normalized.operations,{anchor,activeAnchors,currentAnchor,view,allowFacts:true}) : {session:project(record,{activeAnchors,currentAnchor,view}),changeId:null};
         const stateRefs=record.binding.factEntryRefs.map(ref => ({...ref,version:applied.session.entries.find(entry => entryKey(entry.ref) === entryKey(ref)).version}));
-        const receipt={schemaVersion:1,id:randomUUID(),sessionId,turnKey:normalized.turnKey,source:normalized.source,kind:normalized.kind,databaseRevision:state.revision+1,changeId:applied.changeId,stateRefs,summary:normalized.summary,packet:normalized.packet,...normalized.kind === 'opening' ? {openingText:normalized.openingText} : {},createdAt:new Date().toISOString()};
+        const receipt={schemaVersion:1,id:randomUUID(),sessionId,turnKey:normalized.turnKey,source:normalized.source,kind:normalized.kind,databaseRevision:state.revision+1,changeId:applied.changeId,stateRefs,summary:normalized.summary,packet:normalized.packet,...round?{factRoundId:round.roundId,factRevision:1,candidateId:round.candidates[0].id}:{},...normalized.kind === 'opening' ? {openingText:normalized.openingText} : {},createdAt:new Date().toISOString()};
         (record.receipts ??= []).push({receipt,fingerprint:digest});
+        if(round){round.initialAcceptedReceiptId=receipt.id;round.receiptPreconditions={[receipt.id]:preconditions(applied.session.entries,record.binding.factEntryRefs)};}
         return {receipt};
       },state => {
-        const record=sessionRecord(state,sessionId),item=(record.receipts ?? []).find(item => item.receipt.source.turnStartSeq === normalized.source.turnStartSeq && activeReceipt(item,activeAnchors));
+        const record=sessionRecord(state,sessionId),round=(record.factRounds??[]).find(round=>round.source.turnStartSeq===normalized.source.turnStartSeq&&originActive(round,view)),item=round?.initialAcceptedReceiptId?(record.receipts??[]).find(item=>item.receipt.id===round.initialAcceptedReceiptId):(record.receipts ?? []).find(item => item.receipt.source.turnStartSeq === normalized.source.turnStartSeq && activeReceipt(item,activeAnchors,record,view));
         if (!item) return undefined;
         if (item.fingerprint !== digest) {
           const conflict=new DatabaseError('TURN_ALREADY_COMMITTED','This active turn already has a fact receipt',409);conflict.receiptId=item.receipt.id;throw conflict;
@@ -402,31 +468,53 @@ export function createDatabaseStore({ directory }) {
       });
       return result.receipt;
     },
-    receipt(sessionId,{id,turnKey},{activeAnchors}={}) {
+    receipt(sessionId,{id,turnKey},{activeAnchors,view}={}) {
       return read(state => {
         const record=sessionRecord(state,sessionId);
         let seq;try{const parts=JSON.parse(turnKey);if(Array.isArray(parts)&&parts[0]===sessionId&&Number.isSafeInteger(parts[1]))seq=parts[1];}catch{/* Receipt IDs do not require a turn selector. */}
         const matches=(record.receipts ?? []).filter(item => id ? item.receipt.id === id : item.receipt.turnKey === turnKey || seq !== undefined && item.receipt.source.turnStartSeq === seq);
-        const item=matches.find(item=>activeReceipt(item,activeAnchors)) ?? matches[0];
+        const selected=turnKey===undefined&&!id?(record.receipts??[]).filter(item=>activeReceipt(item,activeAnchors,record,view)).sort(receiptOrder):matches.filter(item=>activeReceipt(item,activeAnchors,record,view));
+        const item=selected.at(-1) ?? matches[0];
         if (!item) {if(id)error('RECEIPT_NOT_FOUND','The receipt is unavailable in this story',404);return null;}
-        if (!activeReceipt(item,activeAnchors)) error('INACTIVE_SOURCE','The receipt source is no longer active',409);
+        if (!activeReceipt(item,activeAnchors,record,view)) error('INACTIVE_SOURCE','The receipt source is no longer active',409);
         return projectedReceipt(item.receipt,sessionId);
       });
     },
-    forkSession(fromId, toId, { activeAnchors, currentAnchor, expectedRevision } = {}) {
+    forkSession(fromId, toId, { activeAnchors, currentAnchor,view, expectedRevision } = {}) {
       return mutate(expectedRevision, state => {
         identifier(toId, 'Child session ID');
         if (fromId === toId || state.sessions[hash(toId)]) error('SESSION_EXISTS', 'Fork requires a distinct unbound child session', 409);
         const parent = sessionRecord(state, fromId);
-        const effective = project(parent, { activeAnchors, currentAnchor });
+        const effective = project(parent, { activeAnchors, currentAnchor,view });
         // Retain inherited causal changes so a child rollback into its seed can
         // exclude them. Flattening to effective.entries would make them permanent.
         const inherited = effective.changes.map(change => ({ ...change, operations: change.operations.filter(operation => operation.op !== 'note' || change.anchor === currentAnchor) }));
         const baselineNotes = (parent.baselineNotes ?? []).filter(note => note.anchor === currentAnchor);
         const child = {...structuredClone(parent),id:toId,baselineNotes,changes:inherited};
-        child.receipts=(parent.receipts ?? []).filter(item => activeReceipt(item,activeAnchors));
+        child.receipts=structuredClone((parent.receipts ?? []).filter(item => activeReceipt(item,activeAnchors,parent,view)));
+        if(view&&parent.factReviewVersion===1){
+          child.factDecisions=(parent.factDecisions??[]).flatMap(decision=>{
+            const attempts=decision.attempts.filter(source=>runVisible(view,source,decision.operationId,decision.requestHash,'rp-gm-fact-decision'));
+            if(!attempts.length)return[];
+            const inherited={...structuredClone(decision),source:attempts.at(-1),attempts};
+            if(!decisionApplied(parent,decision,view)&&!(decision.status==='failed'&&decision.completion&&runVisible(view,decision.completion,decision.operationId,decision.requestHash,'rp-gm-fact-decision',true))){delete inherited.completion;delete inherited.finalized;delete inherited.factReceiptId;delete inherited.status;delete inherited.errorCode;delete inherited.errorMessage;delete inherited.errorStatus;}
+            return[inherited];
+          });
+          child.factRounds=(parent.factRounds??[]).filter(round=>originActive(round,view)).map(original=>{
+            const round=structuredClone(original),visible=reviewRoundView(parent,original,toId,view,child.receipts);
+            round.candidates=round.candidates.filter(candidate=>candidateVisible(original,candidate,view));
+            round.candidateCauses=Object.fromEntries(Object.entries(round.candidateCauses??{}).filter(([id])=>round.candidates.some(candidate=>candidate.id===id)));
+            round.generations=(round.generations??[]).filter(generation=>round.candidates.some(candidate=>candidate.id===generation.candidateId)).map(generation=>({...generation,attempts:generation.attempts.filter(source=>runVisible(view,source,generation.request.operationId,generation.requestHash,'rp-gm-fact-regenerate')),confirmations:generation.confirmations.filter(source=>runVisible(view,source,generation.request.operationId,generation.requestHash,'rp-gm-fact-regenerate',true,{schemaVersion:1,operationId:generation.request.operationId,candidateId:generation.candidateId,payloadHash:generation.payloadHash}))}));
+            for(const candidate of round.candidates)if(candidate.origin==='regenerated')candidate.generationConfirmed=generationConfirmed(round,candidate,view);
+            round.reviewEvents=(round.reviewEvents??[]).filter(event=>event.type==='candidate'?round.candidates.some(candidate=>candidate.id===event.candidateId):child.factDecisions.some(decision=>decision.operationId===event.operationId&&decision.completion));
+            round.receiptPreconditions=Object.fromEntries(Object.entries(round.receiptPreconditions??{}).filter(([id])=>child.receipts.some(item=>item.receipt.id===id)));
+            round.pendingCandidateId=visible.pendingCandidateId;round.approvalRequired=visible.approvalRequired;
+            round.version=1+round.generations.length*2+child.factDecisions.filter(decision=>decision.roundId===round.roundId).length+round.reviewEvents.filter(event=>event.type==='settled').length;
+            return round;
+          });
+        }
         state.sessions[hash(toId)] = child;
-        return {session:project(child,{currentAnchor}),binding:child.binding};
+        return {session:project(child,{currentAnchor,view}),binding:child.binding};
       });
     },
   };
