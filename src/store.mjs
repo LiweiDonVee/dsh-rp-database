@@ -388,10 +388,10 @@ export function createDatabaseStore({ directory }) {
       return read(state => {const record=sessionRecord(state,sessionId);return legacySnapshot({...project(record,options),sourceId:record.sourceId,revision:state.revision});});
     },
     sessionV2(sessionId,options) {return read(state => ({...project(sessionRecord(state,sessionId),options),revision:state.revision}));},
-    applyOperations(sessionId, operations, { expectedRevision, anchor, activeAnchors, currentAnchor } = {}) {
+    applyOperations(sessionId, operations, { expectedRevision, anchor, activeAnchors, currentAnchor, view } = {}) {
       return mutate(expectedRevision, state => {
         const record = sessionRecord(state, sessionId);
-        const effective = project(record,{activeAnchors,currentAnchor});legacySnapshot(effective);
+        const effective = project(record,{activeAnchors,currentAnchor,view});legacySnapshot(effective);
         if (!Array.isArray(operations)) error('INVALID_OPERATION','Operations must be an array');
         const qualified = operations.map(operation => {
           if (operation?.op === 'add') return operation;
@@ -400,7 +400,7 @@ export function createDatabaseStore({ directory }) {
           if (!entry) error('NOT_FOUND',`Entry not found: ${id}`,404);
           return {...rest,ref:entry.ref};
         });
-        const result=applyChange(record,qualified,{anchor,activeAnchors,currentAnchor,additionSourceKey:record.binding.sources[0]?.key ?? '@session'});
+        const result=applyChange(record,qualified,{anchor,activeAnchors,currentAnchor,view,additionSourceKey:record.binding.sources[0]?.key ?? '@session'});
         const session=legacySnapshot({...result.session,sourceId:record.sourceId});delete session.revision;
         return {...result,session,entries:session.entries};
       });

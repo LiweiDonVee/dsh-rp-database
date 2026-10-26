@@ -91,6 +91,28 @@ test('ordinary commit with capture atomically retains the exact before-state and
   assert.equal((await access.snapshot()).entries.find(entry=>entry.id==='gm.facts').version,2)
 })
 
+for(const acceptance of ['ordinary','approved'])test(`legacy patch keeps proof-bearing accepted work visible (${acceptance})`,async t=>{
+  const f=await fixture(t,{proposal:acceptance==='approved'}),request=input(2,{operations:[{op:'add',entry:{id:'new-work',content:'accepted work'}}]})
+  let receipt
+  if(acceptance==='ordinary')receipt=await f.access.commit(request)
+  else{
+    const proposal=await f.access.propose(request),reserved=await reserve(f,proposal.round)
+    receipt=(await f.service.finalizeFactDecision({sessionId:'story',operationId:'decision-A',source:finish(f.events,reserved.source)})).receipt
+  }
+  const before=await f.service.effective({sessionId:'story',agent:f.agent}),native=structuredClone(f.events)
+  assert.equal(before.entries.find(entry=>entry.id==='new-work').version,1)
+  const patched=await f.service.patch({sessionId:'story',agent:f.agent,expectedRevision:before.revision,operations:[{op:'update',id:'new-work',patch:{content:'later edit'}}]})
+  const effective=await f.service.effective({sessionId:'story',agent:f.agent}),work=effective.entries.find(entry=>entry.id==='new-work')
+  assert.equal(work.content,'later edit');assert.equal(work.version,2)
+  assert.deepEqual({...patched.session,revision:patched.revision},effective)
+  assert.deepEqual(patched.entries,effective.entries)
+  assert.deepEqual(effective.entries.filter(entry=>entry.id.startsWith('gm.')),before.entries.filter(entry=>entry.id.startsWith('gm.')))
+  assert.equal((await f.access.latestReceipt()).id,receipt.id)
+  await assert.rejects(f.service.patch({sessionId:'story',agent:f.agent,expectedRevision:effective.revision,operations:[{op:'update',id:'gm.facts',patch:{content:JSON.stringify(facts('Forbidden'))}}]}),{code:'FACT_OWNER_REQUIRED'})
+  assert.equal((await f.service.state()).revision,effective.revision)
+  assert.deepEqual(f.events,native)
+})
+
 test('intent and run-only cannot write facts; exact successful done atomically accepts fixed operations once',async t=>{
   const f=await fixture(t),before=await world(f.access),proposal=await f.access.propose(input(2,{operations:[{op:'update',ref:{sourceKey:'@session',entryId:'work'},patch:{content:'accepted once'}}]}))
   assert.equal(typeof f.service.recordFactDecision,'function','owner decisions must persist an intent before finalization')

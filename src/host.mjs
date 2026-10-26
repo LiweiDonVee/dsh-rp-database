@@ -214,7 +214,7 @@ export async function createDatabaseHost(ctx,options={}){
     patch:input=>run(input.signal,async signal=>{
       const {view}=await current(input,signal)
       if(!view.currentAnchor)throw new DatabaseError('ANCHOR_REQUIRED','Story edits require a current Agent turn',409)
-      const result=await store.applyOperations(input.sessionId,input.operations,{expectedRevision:input.expectedRevision,anchor:view.currentAnchor,activeAnchors:view.activeAnchors,currentAnchor:view.currentAnchor})
+      const result=await store.applyOperations(input.sessionId,input.operations,{expectedRevision:input.expectedRevision,anchor:view.currentAnchor,activeAnchors:view.activeAnchors,currentAnchor:view.currentAnchor,view})
       changed(input.sessionId);return result
     }),
     applyToSnapshot:applyOperations,
