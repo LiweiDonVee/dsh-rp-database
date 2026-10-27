@@ -1,12 +1,18 @@
 # 数据库、主动上下文与最后一步组合验收
 
-## 当前 0.3.0 事实审批／修订源码检查点 — 2026-10-27
+## 当前 0.3.0 组合原生证据 — 2026-10-27
+
+官方 DSH 0.2.1-rc.3 的隔离 home 使用 V6 七包实际安装，审批／两层重生的五组功能断言 **5/5 通过**，覆盖真实决策结算、当前事实驱动下一轮及不同 home 冷恢复；两个结算恢复端点与 replay 的全部模型阶段均为 0。旧九场景回归及同次默认依赖回读、Story Kit 旧十三阶段也分别通过，不能合并为一个测试总数。
+
+V6 manifest SHA256 为 `79aa41cb6b3602b3fa2a02cf27cdd6b0bd3b72f34c7ba6a2b078a620b765aeeb`，本次受测 Database 0.3.0 archive 为 `3852262c3b7fa12af30fdba893ca5ce9ba3fe8c1502da19bef6f6098338cfc1a`。完整来源、实际计数、raw SHA 与限制见 [Studio 当前原生证据](https://github.com/LiweiDonVee/dsh-rp-studio/blob/main/docs/native-acceptance.md#v6-approval-and-regeneration)。五组 raw 保留 `checkpoint-passed`／`finalAcceptance:false`；发行包与最终 CI 另校验，下载包按同一 Release 的 SHA256SUMS 核对。本页下方组件检查点及历史哈希保留原归属。
+
+## 0.3.0 事实审批／修订源码检查点（V6 之前）— 2026-10-27
 
 产品源码 `93853ccbff8b4ad7997471a72fe7e62cc24c2eae` 的 scoped spec／quality 审查已通过，legacy patch 的 canonical-view 传递问题已关闭。冻结 0.3.0 包 SHA256 为 `3bfe66001889d373ded28a312f3f55613b94828f4506f9e11727fd64bdb01f77`，对应本次 Markdown 更新前的产品包。作者记录的最终组件检查为 133 host +24 UI、lint/build/package 通过；本次文档收尾未重跑检查。
 
 当前新流程组合为 Database 0.3.0、GM 0.2.0、LastStep 0.4.0；选材可配 Context 0.3.0，Loop 0.1.0 不变，界面／存档可配 Studio 1.4.0 与 StoryKit 0.2.0。`factReview=1`、精确 run/done、provisional 候选确认、原子事实版本与旧接口兼容范围见[API v2](api-v2.md)。
 
-新增审批／两层重生实际组合 native 验收尚未完成；源码 PASS、组件 fixtures 和旧 default-OFF 回归不能代替该 gate。最终包清单、实际命令／模型计数、冷恢复与跨 home 证据须在对应运行后单独追加。以下 0.2／0.1 历史哈希及结果保持原归属，不作为 0.3 新功能的原生 PASS。
+本源码检查点及组件 fixtures 不单独证明组合 native 结果；后续 V6 的实际包、命令／模型计数、冷恢复与跨 home 证据见上节。以下 0.2／0.1 历史哈希及结果保持原归属。
 
 ## 0.2.0 DB-B 资料、索引与传输检查点
 
