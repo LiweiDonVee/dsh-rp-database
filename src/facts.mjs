@@ -30,7 +30,7 @@ export function canonicalSource(value){
 }
 export function factCommit(value,sessionId){
   const code='INVALID_FACT_COMMIT'
-  keys(value,['turnKey','source','expectedRevision','operations','summary','packet','kind','openingText'],code)
+  keys(value,['turnKey','source','expectedRevision','operations','summary','packet','kind','openingText','capture'],code)
   const source=canonicalSource(value.source)
   if(value.turnKey!==JSON.stringify([sessionId,source.turnStartSeq]))fail(code,'turnKey must identify this story and its canonical turn/start')
   if(!sequence(value.expectedRevision)||!Array.isArray(value.operations)||!['turn','opening'].includes(value.kind))fail(code,'A revision, operations and receipt kind are required')
@@ -69,10 +69,10 @@ export function activeFactSource(view,source,kind){
   const normalized=canonicalSource(source),assistant=view.events.find(event=>event.type==='assistant/message'&&event.data?.message?.id===source.assistantMessageId)
   if(!assistant||!view.activeAnchors.includes(source.assistantMessageId))fail('INACTIVE_SOURCE','The factual source is not active',409)
   const start=view.events.filter(event=>event.type==='turn/start'&&event.seq<assistant.seq).at(-1)
-  const name=kind==='opening'?'rp_begin_story':'rp_commit_turn'
-  const block=assistant.data.message.content?.find(block=>block.type==='tool-call'&&block.id===source.callId&&block.name===name)
+  const names=kind==='opening'?['rp_begin_story']:kind==='proposal'?['rp_propose_turn']:kind==='review'?['rp_commit_turn','rp_propose_turn']:['rp_commit_turn']
+  const block=assistant.data.message.content?.find(block=>block.type==='tool-call'&&block.id===source.callId&&names.includes(block.name))
   const next=view.events.find(event=>event.seq>assistant.seq&&event.type==='assistant/message'&&event.data?.turn===assistant.data.turn&&event.data?.step===assistant.data.step)
-  const calls=view.events.filter(event=>event.type==='tool/call'&&event.seq>assistant.seq&&(!next||event.seq<next.seq)&&event.data?.turn===assistant.data.turn&&event.data?.step===assistant.data.step&&event.data?.callId===source.callId&&event.data?.name===name)
+  const calls=view.events.filter(event=>event.type==='tool/call'&&event.seq>assistant.seq&&(!next||event.seq<next.seq)&&event.data?.turn===assistant.data.turn&&event.data?.step===assistant.data.step&&event.data?.callId===source.callId&&event.data?.name===block?.name)
   const call=source.callSeq===undefined?(calls.length===1?calls[0]:undefined):calls.find(call=>call.seq===source.callSeq)
   if(!block||!call||!start||start.seq!==source.turnStartSeq||start.data.turn!==assistant.data.turn)fail('INACTIVE_SOURCE','The source does not match an active native GM tool call',409)
   return{...normalized,callSeq:call.seq}

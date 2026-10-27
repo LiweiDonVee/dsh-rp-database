@@ -9,6 +9,7 @@ import {registerDatabaseTools} from './agent.mjs'
 import {createDatabaseRoutes} from './routes.mjs'
 import {applyScopedOperations,entryKey,entryRef,parseEntryKey,plannerOperations,selectScopedEntries} from './references.mjs'
 import {activeFactSource,factCommit} from './facts.mjs'
+import {factCapture} from './fact-review.mjs'
 import {extractText} from './documents.mjs'
 import {createVectorIndex} from './index-store.mjs'
 import {restoreEnvelope,restoreTransport,sessionIds,validateCanonicalState} from './state-transfer.mjs'
@@ -31,7 +32,7 @@ export async function createDatabaseHost(ctx,options={}){
   const retriever=options.retriever??createRetriever({...configured,...options.providers,...index.embedEntries?{embedEntries:index.embedEntries}:{}})
   const readOwner=createOwnerReader(ctx),bindings=new Map(),subscribers=new Map(),operations=new Set(),forking=new Map()
   let stopped=false,adapter,unsubscribeSource,inheritance=Promise.resolve()
-  async function sync(){bindings.clear();for(const item of await store.bindingsV2())bindings.set(item.sessionId,item);adapter?.sync()}
+  async function sync(){const rows=await store.bindingsV2();bindings.clear();for(const item of rows)bindings.set(item.sessionId,item);adapter?.sync()}
   await sync()
   async function run(signal,work){
     if(stopped)throw new DatabaseError('UNAVAILABLE','Database plugin has been unloaded',503)
@@ -55,7 +56,7 @@ export async function createDatabaseHost(ctx,options={}){
     const promise=inheritance.then(async()=>{
       if(bindings.has(view.sessionId))return
       const snapshot=await store.snapshot()
-      try{await store.forkSession(view.parentSession,view.sessionId,{activeAnchors:view.activeAnchors,expectedRevision:snapshot.revision})}
+      try{await store.forkSession(view.parentSession,view.sessionId,{activeAnchors:view.activeAnchors,view,expectedRevision:snapshot.revision})}
       catch(error){if(error.code!=='SESSION_EXISTS')throw error}
       await sync();changed(view.sessionId)
     })
@@ -66,12 +67,12 @@ export async function createDatabaseHost(ctx,options={}){
   async function current(input,signal){
     const view=await scope(input,signal);await ensure(view)
     if(!bindings.has(view.sessionId))throw new DatabaseError('NOT_BOUND','Bind a database to this story first',409)
-    return{view,value:await store.session(view.sessionId,{activeAnchors:view.activeAnchors,...view.currentAnchor?{currentAnchor:view.currentAnchor}:{}})}
+    return{view,value:await store.session(view.sessionId,{activeAnchors:view.activeAnchors,view,...view.currentAnchor?{currentAnchor:view.currentAnchor}:{}})}
   }
   async function currentV2(input,signal){
     const view=await scope(input,signal);await ensure(view)
     if(!bindings.has(view.sessionId))throw new DatabaseError('NOT_BOUND','Bind sources to this story first',409)
-    return{view,value:await store.sessionV2(view.sessionId,{activeAnchors:view.activeAnchors,...view.currentAnchor?{currentAnchor:view.currentAnchor}:{}})}
+    return{view,value:await store.sessionV2(view.sessionId,{activeAnchors:view.activeAnchors,view,...view.currentAnchor?{currentAnchor:view.currentAnchor}:{}})}
   }
   async function qualifiedSearch(input,signal){
     const{value}=await currentV2(input,signal),indexed=value.entries.map(entry=>({...entry,id:entryKey(entry.ref)}))
@@ -81,16 +82,17 @@ export async function createDatabaseHost(ctx,options={}){
   async function genericCommit(input,signal){
     const{view}=await currentV2(input,signal)
     if(!view.currentAnchor)throw new DatabaseError('ANCHOR_REQUIRED','Story edits require a current Agent turn',409)
-    const result=await store.applyOperationsV2(input.sessionId,input.operations,{expectedRevision:input.expectedRevision,anchor:view.currentAnchor,activeAnchors:view.activeAnchors,currentAnchor:view.currentAnchor})
+    const result=await store.applyOperationsV2(input.sessionId,input.operations,{expectedRevision:input.expectedRevision,anchor:view.currentAnchor,activeAnchors:view.activeAnchors,currentAnchor:view.currentAnchor,view})
     changed(input.sessionId);return input.agent?{...result,session:enabled(result.session),entries:result.entries.filter(entry=>entry.mode!=='disabled')}:result
   }
   async function receiptFor(input,selector,signal){
-    const{view}=await currentV2(input,signal),receipt=await store.receipt(input.sessionId,selector,{activeAnchors:view.activeAnchors})
-    if(receipt)activeFactSource(view,receipt.source,receipt.kind)
+    const{view}=await currentV2(input,signal),receipt=await store.receipt(input.sessionId,selector,{activeAnchors:view.activeAnchors,view})
+    if(receipt)activeFactSource(view,receipt.source,receipt.factRoundId?'review':receipt.kind)
     return receipt
   }
   const service={
     apiVersion:2,
+    capabilities:Object.freeze({factReview:1}),
     contentRevision:(input={})=>run(input.signal,()=>store.contentRevision()),
     exportContent:input=>run(input.signal,()=>{owner(input);return store.exportContent(input)}),
     importContent:input=>run(input.signal,async()=>{owner(input);const result=await store.importContent(input);await sync();changed();return result}),
@@ -123,10 +125,10 @@ export async function createDatabaseHost(ctx,options={}){
     async state(input={}){return run(input.signal,async signal=>{
       let binding=null
       if(input.sessionId){const view=await scope(input,signal);await ensure(view);if(bindings.has(view.sessionId)){
-        const options={activeAnchors:view.activeAnchors,...view.currentAnchor?{currentAnchor:view.currentAnchor}:{}}
+        const options={activeAnchors:view.activeAnchors,view,...view.currentAnchor?{currentAnchor:view.currentAnchor}:{}}
         try{binding=await store.session(view.sessionId,options)}catch(error){if(error.code!=='QUALIFIED_REFERENCE_REQUIRED')throw error;binding=await store.sessionV2(view.sessionId,options)}
       }}
-      return{...await store.snapshot(),binding,capabilities:{documents:true,index:true,contentTransfer:true,stateTransfer:true},retrieval:{embedding:{configured:!!(configured.embed??options.providers?.embed),model:options.embedding?.model??null},reranking:{configured:!!(configured.rerank??options.providers?.rerank),model:options.reranking?.model??null}}}
+      return{...await store.snapshot(),binding,capabilities:{documents:true,index:true,contentTransfer:true,stateTransfer:true,factReview:1},retrieval:{embedding:{configured:!!(configured.embed??options.providers?.embed),model:options.embedding?.model??null},reranking:{configured:!!(configured.rerank??options.providers?.rerank),model:options.reranking?.model??null}}}
     })},
     database:input=>run(input.signal,async()=>{
       const snapshot=await store.snapshot(),database=await store.database(input.databaseId,input.version),sourceId=snapshot.databases.find(item=>item.id===database.id)?.sourceId
@@ -150,6 +152,12 @@ export async function createDatabaseHost(ctx,options={}){
     searchV2:input=>run(input.signal,signal=>qualifiedSearch(input,signal)),
     patchV2:input=>run(input.signal,signal=>genericCommit(input,signal)),
     initializeStoryState:input=>run(input.signal,async signal=>{owner(input);await scope(input,signal);const result=await store.initializeStoryState(input.sessionId,input);await sync();changed(input.sessionId);return result}),
+    factReviewState:input=>run(input.signal,async signal=>{const{view}=await currentV2(input,signal);return store.factReviewState(input.sessionId,{activeAnchors:view.activeAnchors,currentAnchor:view.currentAnchor,view})}),
+    factReviewProjection:input=>run(input.signal,async signal=>(await service.factReviewState({...input,signal})).projection),
+    stageFactCandidate:input=>run(input.signal,async signal=>{owner(input);const{view}=await currentV2(input,signal),result=await store.stageFactCandidate(input,{activeAnchors:view.activeAnchors,currentAnchor:view.currentAnchor,view});changed(input.sessionId);return result}),
+    recordFactDecision:input=>run(input.signal,async signal=>{owner(input);const view=await scope(input,signal);await ensure(view);const result=await store.recordFactDecision(input,{activeAnchors:view.activeAnchors,currentAnchor:view.currentAnchor,view});changed(input.sessionId);return result}),
+    finalizeFactDecision:input=>run(input.signal,async signal=>{owner(input);const view=await scope(input,signal);await ensure(view);try{return await store.finalizeFactDecision(input,{activeAnchors:view.activeAnchors,currentAnchor:view.currentAnchor,view})}finally{changed(input.sessionId)}}),
+    factDecision:input=>run(input.signal,async signal=>{const{view}=await currentV2(input,signal);return store.factDecision(input.sessionId,input.operationId,{activeAnchors:view.activeAnchors,currentAnchor:view.currentAnchor,view})}),
     factAccess:input=>run(input.signal,async signal=>{
       if(!input.agent)throw new DatabaseError('AGENT_REQUIRED','Fact access requires the live story Agent',403)
       await currentV2(input,signal)
@@ -159,11 +167,20 @@ export async function createDatabaseHost(ctx,options={}){
         commit:value=>run(input.signal,async signal=>{
           const normalized=factCommit(value,bound.sessionId),{view}=await currentV2(bound,signal)
           normalized.source=activeFactSource(view,normalized.source,normalized.kind)
-          const receipt=await store.commitFacts(bound.sessionId,normalized,{activeAnchors:view.activeAnchors,currentAnchor:view.currentAnchor})
+          if(normalized.capture!==undefined)normalized.capture=factCapture(normalized.capture,view,normalized.source)
+          const receipt=await store.commitFacts(bound.sessionId,normalized,{activeAnchors:view.activeAnchors,currentAnchor:view.currentAnchor,view})
           changed(bound.sessionId);return receipt
+        }),
+        propose:value=>run(input.signal,async signal=>{
+          const normalized=factCommit(value,bound.sessionId),{view}=await currentV2(bound,signal)
+          normalized.source=activeFactSource(view,normalized.source,'proposal')
+          normalized.capture=factCapture(normalized.capture,view,normalized.source)
+          const proposal=await store.proposeFacts(bound.sessionId,normalized,{activeAnchors:view.activeAnchors,currentAnchor:view.currentAnchor,view})
+          changed(bound.sessionId);return proposal
         }),
         getReceipt:id=>run(input.signal,signal=>receiptFor(bound,{id},signal)),
         currentReceipt:turnKey=>run(input.signal,signal=>receiptFor(bound,{turnKey},signal)),
+        latestReceipt:()=>run(input.signal,signal=>receiptFor(bound,{},signal)),
       })
     }),
     materialAccess:input=>run(input.signal,async signal=>{
@@ -197,7 +214,7 @@ export async function createDatabaseHost(ctx,options={}){
     patch:input=>run(input.signal,async signal=>{
       const {view}=await current(input,signal)
       if(!view.currentAnchor)throw new DatabaseError('ANCHOR_REQUIRED','Story edits require a current Agent turn',409)
-      const result=await store.applyOperations(input.sessionId,input.operations,{expectedRevision:input.expectedRevision,anchor:view.currentAnchor,activeAnchors:view.activeAnchors,currentAnchor:view.currentAnchor})
+      const result=await store.applyOperations(input.sessionId,input.operations,{expectedRevision:input.expectedRevision,anchor:view.currentAnchor,activeAnchors:view.activeAnchors,currentAnchor:view.currentAnchor,view})
       changed(input.sessionId);return result
     }),
     applyToSnapshot:applyOperations,
@@ -207,7 +224,7 @@ export async function createDatabaseHost(ctx,options={}){
     async close(){if(stopped)return;stopped=true;unsubscribeSource?.();for(const life of operations)life.abort();adapter?.();subscribers.clear();bindings.clear()},
   }
   adapter=registerDatabaseTools(ctx,service)
-  unsubscribeSource=ctx.on('session/event',(session,event)=>{if(['user/message','assistant/message','tool/result','turn/end'].includes(event.type))changed(session.id)})
+  unsubscribeSource=ctx.on('session/event',(session,event)=>{if(['user/message','assistant/message','tool/result','turn/end','command/run','command/done'].includes(event.type))changed(session.id)})
   return service
 }
 

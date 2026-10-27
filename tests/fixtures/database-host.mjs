@@ -5,7 +5,7 @@ export function turnEvents({start=1,turn=1,anchor='assistant-A',callId='reused-c
 export function hostFixture(events=turnEvents()){
   const handlers=new Map(),agents=new Map(),definitions=new Map()
   const on=(name,listener)=>{const set=handlers.get(name)??new Set();set.add(listener);handlers.set(name,set);return()=>set.delete(listener)}
-  const ctx={on,agents:{list:()=>[...agents.values()],get:id=>agents.get(id)},connection:{browserPeer:{id:'owner'}},tools:{get:()=>undefined},systemPrompt:{context:()=>()=>{}},typertGateway:{stream:async input=>({async *[Symbol.asyncIterator](){const id=input.args.request.address.sessionId;yield{type:'snapshot',header:{id},cursor:100,hasMore:false,records:events.map(event=>({type:'event',event}))}}})}}
+  const ctx={on,agents:{list:()=>[...agents.values()],get:id=>agents.get(id)},connection:{browserPeer:{id:'owner'}},tools:{get:()=>undefined},systemPrompt:{context:()=>()=>{}},typertGateway:{stream:async input=>({async *[Symbol.asyncIterator](){const id=input.args.request.address.sessionId,agent=agents.get(id);yield{type:'snapshot',header:agent?.session.header??{id},cursor:100,hasMore:false,records:(agent?.session.snapshotEvents()??events).map(event=>({type:'event',event}))}}})}}
   const addAgent=(id='story',parentSession)=>{
     const agent={id,session:{id,header:{id,...parentSession?{parentSession}:{}},snapshotEvents:()=>events},ctx:{on,tools:{register:tool=>{definitions.set(tool.name,tool);return()=>definitions.delete(tool.name)},restrict:()=>()=>{}}}}
     agents.set(id,agent);return agent

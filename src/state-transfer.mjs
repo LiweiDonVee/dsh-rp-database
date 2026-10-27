@@ -5,6 +5,8 @@ import {activeFactSource,factCommit,fingerprint,validateFactState} from './facts
 import {documentContent,validateChunkReferences} from './document-types.mjs'
 import {publicSource} from './transfer.mjs'
 import {projectSession} from './session.mjs'
+import {changeVisible} from './fact-review.mjs'
+import {validateReviewCanonical,validateReviewReceipt,validateReviewStructure} from './fact-review-transfer.mjs'
 
 const key=value=>createHash('sha256').update(value).digest('hex')
 const object=value=>value!==null&&typeof value==='object'&&!Array.isArray(value)
@@ -65,6 +67,8 @@ export function exportDatabaseState(state,ids,additionalRefs){
     source(record.sourceId)
     for(const entry of record.baseline)if(entry.provenance)document(entry.provenance.documentId,entry.provenance.documentVersion)
     for(const item of record.receipts??[])if(!ids.includes(item.receipt.sessionId))requireContent('Include the receipt origin ancestor in sessionIds')
+    for(const round of record.factRounds??[])if(!ids.includes(round.sessionId))requireContent('Include the captured fact origin ancestor in sessionIds')
+    for(const source of [...(record.factDecisions??[]).flatMap(decision=>decision.attempts),...(record.factRounds??[]).flatMap(round=>(round.generations??[]).flatMap(generation=>generation.attempts))])if(!ids.includes(source.sessionId))requireContent('Include the owner command origin ancestor in sessionIds')
   }
   // Document ownership names an ID, not a version. All explicit runtime/passive refs are now selected.
   for(const versions of documents.values())for(const item of versions.values())if(!databases.has(item.document.databaseId))throw new DatabaseError('EXPORT_REQUIREMENT_MISSING','A document owner requires an explicit database version '+JSON.stringify({databaseId:item.document.databaseId,documentId:item.document.id,documentVersion:item.document.version}))
@@ -101,7 +105,7 @@ function validateEnvelope(value,ids){
   }
   for(const item of docs.values())if(!p.databases.some(record=>record.id===item.document.databaseId))requireContent('Missing document owner library')
   for(const record of p.sessions){
-    exact(record,['id','binding','sourceId','baseline','baselineNotes','reservedKeys','changes','initialization','receipts'])
+    exact(record,['id','binding','sourceId','baseline','baselineNotes','reservedKeys','changes','initialization','receipts','factReviewVersion','factRounds','factDecisions'])
     if(!ids.includes(record.id))invalid('Session record is outside the requested namespace')
     exact(record.binding,['schemaVersion','sources','factEntryRefs']);if(record.binding.schemaVersion!==2||!Array.isArray(record.binding.factEntryRefs))invalid('Invalid binding')
     record.binding.sources=sourceBindings(record.binding.sources);record.binding.factEntryRefs=record.binding.factEntryRefs.map(entryRef);unique(record.binding.factEntryRefs.map(entryKey),'fact refs')
@@ -121,7 +125,7 @@ function validateEnvelope(value,ids){
     for(const note of record.baselineNotes){exact(note,['ref','text','anchor']);entryRef(note.ref);if(!text(note.text)||!text(note.anchor))invalid('Invalid baseline note')}
     unique(record.changes.map(change=>change.id),'change IDs')
     for(const change of record.changes){
-      exact(change,['id','anchor','operations','additionSourceKey']);if(!text(change.anchor)||!Array.isArray(change.operations)||!slots.has(change.additionSourceKey??'@session'))invalid('Invalid causal change')
+      exact(change,['id','anchor','operations','additionSourceKey','decisionOperationId','decisionSource']);if(!text(change.anchor)||!Array.isArray(change.operations)||!slots.has(change.additionSourceKey??'@session'))invalid('Invalid causal change')
       for(const operation of change.operations){
         if(operation.op==='add'){
           applyScopedOperations([],[operation]);const id=entryKey({sourceKey:change.additionSourceKey??'@session',entryId:operation.entry.id})
@@ -135,6 +139,7 @@ function validateEnvelope(value,ids){
     if(record.initialization){exact(record.initialization,['launchId','fingerprint','result']);exact(record.initialization.result,['revision','factEntryRefs']);if(!text(record.initialization.launchId)||!digest(record.initialization.fingerprint)||!positive(record.initialization.result.revision)||fingerprint(record.initialization.result.factEntryRefs)!==fingerprint(record.binding.factEntryRefs))invalid('Invalid initialization journal');validateFactState(record.baseline,record.binding.factEntryRefs)}
     else if(record.binding.factEntryRefs.length)invalid('Fact registry has no initialization')
     record.receipts??=[];if(!Array.isArray(record.receipts))invalid('Invalid receipts');unique(record.receipts.map(item=>item.receipt?.id),'receipt IDs')
+    validateReviewStructure(record,ids)
     const protectedKeys=new Set(record.binding.factEntryRefs.map(entryKey))
     for(const change of record.changes){
       const operations=change.operations.filter(operation=>operation.op!=='add'&&protectedKeys.has(entryKey(operation.ref)))
@@ -144,12 +149,14 @@ function validateEnvelope(value,ids){
     }
     for(const item of record.receipts){
       exact(item,['receipt','fingerprint']);const r=item.receipt
-      exact(r,['schemaVersion','id','sessionId','turnKey','source','kind','databaseRevision','changeId','stateRefs','summary','packet','openingText','createdAt'])
+      exact(r,['schemaVersion','id','sessionId','turnKey','source','kind','databaseRevision','changeId','stateRefs','summary','packet','openingText','createdAt','factRoundId','factRevision','candidateId','supersedesFactReceiptId','decisionSource'])
       const change=r.changeId===null?undefined:record.changes.find(change=>change.id===r.changeId)
       if(r.schemaVersion!==1||!ids.includes(r.sessionId)||!positive(r.databaseRevision)||r.changeId!==null&&!change||!text(r.createdAt)||!Number.isFinite(Date.parse(r.createdAt))||!Array.isArray(r.stateRefs)||change&&change.anchor!==r.source?.assistantMessageId)invalid('Invalid fact receipt')
       const originChange=p.sessions.find(value=>value.id===r.sessionId)?.changes?.find(value=>value.id===r.changeId)??change
       if(change&&originChange!==change&&fingerprint(change.operations)!==fingerprint(originChange.operations)&&fingerprint(change.operations)!==fingerprint(originChange.operations.filter(operation=>operation.op!=='note')))invalid('Inherited receipt operations differ from the original causal change')
-      const commit=factCommit({turnKey:r.turnKey,source:r.source,expectedRevision:0,operations:originChange?.operations??[],summary:r.summary,packet:r.packet,kind:r.kind,...r.openingText===undefined?{}:{openingText:r.openingText}},r.sessionId),{expectedRevision:_revision,...content}=commit
+      const round=r.factRoundId?validateReviewReceipt(record,r,change,originChange):undefined
+      if(!round&&['factRevision','candidateId','supersedesFactReceiptId','decisionSource'].some(field=>r[field]!==undefined))invalid('Fact revision metadata has no captured round')
+      const commit=factCommit({turnKey:r.turnKey,source:r.source,expectedRevision:0,operations:originChange?.operations??[],summary:r.summary,packet:r.packet,kind:r.kind,...round?{capture:round.capture}:{},...r.openingText===undefined?{}:{openingText:r.openingText}},r.sessionId),{expectedRevision:_revision,...content}=commit
       if(!digest(item.fingerprint)||item.fingerprint!==fingerprint(content))invalid('Receipt input fingerprint differs')
       unique(r.stateRefs.map(ref=>{const{version,...entry}=ref;if(!positive(version))invalid('Invalid state version');return entryKey(entry)}),'receipt state refs')
     }
@@ -167,22 +174,23 @@ export function validateCanonicalState(state,views){
     for(const note of record.baselineNotes)if(!assistants.has(note.anchor))invalid('Note anchor does not exist in the canonical destination')
     function projected(through,limit=record.changes.length){
       const prefix=projectSession({header:view.header,records:view.events.filter(event=>event.seq<=through)}),active=new Set(prefix.activeAnchors);let entries=record.baseline
-      for(const change of record.changes.slice(0,limit))if(active.has(change.anchor)){
+      for(const change of record.changes.slice(0,limit))if(active.has(change.anchor)&&changeVisible(record,change,prefix)){
         entries=applyScopedOperations(entries,change.operations,{allowFacts:true,additionSourceKey:change.additionSourceKey??'@session'}).entries
         validateFactState(entries,record.binding.factEntryRefs)
       }
       return entries
     }
     try{
-      record.changes.forEach((change,index)=>projected(assistants.get(change.anchor).seq,index+1))
+      record.changes.forEach((change,index)=>projected(change.decisionSource?.doneSeq??assistants.get(change.anchor).seq,index+1))
       for(const item of record.receipts){
-        const r=item.receipt;activeFactSource(all,r.source,r.kind)
+        const r=item.receipt;activeFactSource(all,r.source,r.factRoundId?'review':r.kind)
         let owner=record.id;const visited=new Set()
         while(owner!==r.sessionId&&!visited.has(owner)){visited.add(owner);owner=views.get(owner)?.header?.parentSession;if(!owner)break}
         if(owner!==r.sessionId)invalid('Receipt origin is not this story or its canonical ancestor')
-        const entries=projected(assistants.get(r.source.assistantMessageId).seq),expected=record.binding.factEntryRefs.map(ref=>({ ...ref,version:entries.find(entry=>entryKey(entry.ref)===entryKey(ref))?.version }))
+        const entries=projected(r.decisionSource?.doneSeq??(r.factRoundId?r.source.callSeq:assistants.get(r.source.assistantMessageId).seq)),expected=record.binding.factEntryRefs.map(ref=>({ ...ref,version:entries.find(entry=>entryKey(entry.ref)===entryKey(ref))?.version }))
         if(fingerprint(expected)!==fingerprint(r.stateRefs))invalid('Receipt state refs do not match the causal prefix')
       }
+      validateReviewCanonical(record,all,{projected,views,records:new Map(state.payload.sessions.map(record=>[record.id,record]))})
     }catch(error){if(error?.code==='RESTORE_REQUIREMENT_MISSING')throw error;invalid('Canonical causal or factual evidence is invalid')}
   }
 }
