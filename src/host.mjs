@@ -32,7 +32,7 @@ export async function createDatabaseHost(ctx,options={}){
   const retriever=options.retriever??createRetriever({...configured,...options.providers,...index.embedEntries?{embedEntries:index.embedEntries}:{}})
   const readOwner=createOwnerReader(ctx),bindings=new Map(),subscribers=new Map(),operations=new Set(),forking=new Map()
   let stopped=false,adapter,unsubscribeSource,inheritance=Promise.resolve()
-  async function sync(){bindings.clear();for(const item of await store.bindingsV2())bindings.set(item.sessionId,item);adapter?.sync()}
+  async function sync(){const rows=await store.bindingsV2();bindings.clear();for(const item of rows)bindings.set(item.sessionId,item);adapter?.sync()}
   await sync()
   async function run(signal,work){
     if(stopped)throw new DatabaseError('UNAVAILABLE','Database plugin has been unloaded',503)
