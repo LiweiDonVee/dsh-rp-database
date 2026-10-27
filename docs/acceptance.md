@@ -1,5 +1,13 @@
 # 数据库、主动上下文与最后一步组合验收
 
+## 当前 0.3.0 事实审批／修订源码检查点 — 2026-10-27
+
+产品源码 `93853ccbff8b4ad7997471a72fe7e62cc24c2eae` 的 scoped spec／quality 审查已通过，legacy patch 的 canonical-view 传递问题已关闭。冻结 0.3.0 包 SHA256 为 `3bfe66001889d373ded28a312f3f55613b94828f4506f9e11727fd64bdb01f77`，对应本次 Markdown 更新前的产品包。作者记录的最终组件检查为 133 host +24 UI、lint/build/package 通过；本次文档收尾未重跑检查。
+
+当前新流程组合为 Database 0.3.0、GM 0.2.0、LastStep 0.4.0；选材可配 Context 0.3.0，Loop 0.1.0 不变，界面／存档可配 Studio 1.4.0 与 StoryKit 0.2.0。`factReview=1`、精确 run/done、provisional 候选确认、原子事实版本与旧接口兼容范围见[API v2](api-v2.md)。
+
+新增审批／两层重生实际组合 native 验收尚未完成；源码 PASS、组件 fixtures 和旧 default-OFF 回归不能代替该 gate。最终包清单、实际命令／模型计数、冷恢复与跨 home 证据须在对应运行后单独追加。以下 0.2／0.1 历史哈希及结果保持原归属，不作为 0.3 新功能的原生 PASS。
+
 ## 0.2.0 DB-B 资料、索引与传输检查点
 
 ### 审查修复轮 2 / T13 — 2026-10-25
