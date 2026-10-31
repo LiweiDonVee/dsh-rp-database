@@ -2,21 +2,23 @@
 
 原生 DSH 故事数据库插件，用可复用、可编辑的条目替代依附 Agent preset 的世界书。一个故事可按顺序固定多个来源版本；同 ID 条目按来源区分，Agent 只维护自己的故事覆盖，不写回原件或其他故事。GM 的事实提交与回执保存在同一个数据库事务中，材料准备阶段不能改写已注册事实。
 
+**0.3.1 界面更新：** 安装 RP Studio 1.5.0 后，从 **RP ▾ → 数据库** 打开完整原生页面；会话顶部与空白页的重复入口自动收纳。未安装或卸载 Studio 时恢复独立入口，右侧原生页签始终保留。管理界面的字体和字号随宿主设置变化。
+
 ![DSH 原生工作区](docs/images/workspace.png)
 
 ## 安装
 
-0.3.0 要求官方 DSH 0.2.1-rc.3 或后续受支持的 0.2.x，Node24。旧 0.1.1 在 rc.2 的历史验收仍保留；新版本不宣称已验过 rc.2。使用构建或正式 Release 的 `dsh-rp-database-0.3.0.tgz`，完全退出 DSH 后执行，再重启：
+0.3.1 要求官方 DSH 0.2.1-rc.3 或后续受支持的 0.2.x，Node24。旧 0.1.1 在 rc.2 的历史验收仍保留；新版本不宣称已验过 rc.2。使用构建或正式 Release 的 `dsh-rp-database-0.3.1.tgz`，完全退出 DSH 后执行，再重启：
 
 ```powershell
-dsh plugin --profile desktop add ./dsh-rp-database-0.3.0.tgz
+dsh plugin --profile desktop add ./dsh-rp-database-0.3.1.tgz
 ```
 
-Web 模式将 desktop 改为 web。点击会话顶部 **数据库** 或右侧新增页签中的 **故事数据库**。Windows 找不到 dsh 时可使用默认官方启动器：
+Web 模式将 desktop 改为 web。安装 RP Studio 1.5.0 时从 **RP ▾ → 数据库** 打开；单独安装时点击会话顶部 **数据库**，也可从右侧新增页签进入 **故事数据库**。Windows 找不到 dsh 时可使用默认官方启动器：
 
 ```powershell
 $dshCli = Join-Path $env:LOCALAPPDATA 'Programs/DeepSeek Harness/resources/runtime/cli/bin/dsh.cmd'
-& $dshCli plugin --profile desktop add ./dsh-rp-database-0.3.0.tgz
+& $dshCli plugin --profile desktop add ./dsh-rp-database-0.3.1.tgz
 ```
 
 ## 使用
