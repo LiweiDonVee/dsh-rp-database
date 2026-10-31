@@ -1,6 +1,6 @@
 {
   "name": "dsh-rp-database",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "DSH RP 动态数据库与会话继承",
   "license": "MIT",
   "type": "module",
