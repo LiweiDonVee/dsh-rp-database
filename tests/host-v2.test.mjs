@@ -25,6 +25,15 @@ async function refreshFixture(t){
   assert.equal(before.notes.length,1);assert.equal(before.changes.length,2);assert.equal(projection.groups.length,1)
   return{...f,input,before,projection}
 }
+test('owner effective and review reads verify explicit lineage before any online GM lookup',async t=>{
+  const f=await fixture(t);await bind(f.service);let online=0,observed=0;
+  const services={rpGM:{sessionLineage:async()=>{online++;throw Object.assign(new Error('An online GM read would re-enter its restore queue'),{code:'ONLINE_LINEAGE_REENTRY'});}},sessionQuery:{observeSession:async id=>{observed++;return{header:{id},events:structuredClone(f.events),inheritedEventCount:0,[Symbol.dispose](){}};}}};
+  f.ctx.get=name=>services[name];const lineages=[{sessionId:'story',parentSessionId:null}];
+  await f.service.effectiveV2({sessionId:'story',lineages});await f.service.factReviewState({sessionId:'story',lineages});
+  assert.equal(online,0);assert.equal(observed,2);
+  for(const method of ['effectiveV2','factReviewState'])await assert.rejects(f.service[method]({sessionId:'story',agent:f.agent,lineages}),{code:'OWNER_REQUIRED'});
+  await assert.rejects(f.service.effectiveV2({sessionId:'story'}),{code:'ONLINE_LINEAGE_REENTRY'});assert.equal(online,1);
+})
 
 test('binding refresh keeps established public reads available until the real store result is delivered',async t=>{
   const {service,store,input,before,projection}=await refreshFixture(t)
