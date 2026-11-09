@@ -119,7 +119,7 @@ export function validateReviewReceipt(record,r,change,originChange=change){
 
 /** Actual canonical histories, never imported status flags, prove every owner cause. */
 export function validateReviewCanonical(record,view,{projected,views,records}){
-  const ancestor=sessionId=>{let current=record.id;const seen=new Set();while(current&&!seen.has(current)){if(current===sessionId)return;seen.add(current);current=views.get(current)?.header?.parentSession}invalid('Review source is not this story or a canonical ancestor')}
+  const ancestor=sessionId=>{let current=record.id;const seen=new Set();while(current&&!seen.has(current)){if(current===sessionId)return;seen.add(current);current=(views.get(current)?.parentSession??views.get(current)?.header?.parentSession)}invalid('Review source is not this story or a canonical ancestor')}
   function verifyRun(source,operationId,requestHash,name,options){
     ancestor(source.sessionId);const origin=views.get(source.sessionId)
     if(!origin)invalid('The declared owner command origin is unavailable')

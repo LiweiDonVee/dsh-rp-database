@@ -185,7 +185,7 @@ export function validateCanonicalState(state,views){
       for(const item of record.receipts){
         const r=item.receipt;activeFactSource(all,r.source,r.factRoundId?'review':r.kind)
         let owner=record.id;const visited=new Set()
-        while(owner!==r.sessionId&&!visited.has(owner)){visited.add(owner);owner=views.get(owner)?.header?.parentSession;if(!owner)break}
+        while(owner!==r.sessionId&&!visited.has(owner)){visited.add(owner);owner=(views.get(owner)?.parentSession??views.get(owner)?.header?.parentSession);if(!owner)break}
         if(owner!==r.sessionId)invalid('Receipt origin is not this story or its canonical ancestor')
         const entries=projected(r.decisionSource?.doneSeq??(r.factRoundId?r.source.callSeq:assistants.get(r.source.assistantMessageId).seq)),expected=record.binding.factEntryRefs.map(ref=>({ ...ref,version:entries.find(entry=>entryKey(entry.ref)===entryKey(ref))?.version }))
         if(fingerprint(expected)!==fingerprint(r.stateRefs))invalid('Receipt state refs do not match the causal prefix')

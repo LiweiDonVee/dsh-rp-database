@@ -1,4 +1,5 @@
 import {DatabaseError} from './core.mjs'
+import {withSessionLineage} from './lineage.mjs'
 
 const text=message=>(message?.content??[]).filter(block=>block.type==='text').map(block=>block.text).join('\n')
 const messageOf=event=>event.type==='user/message'?event.data:event.data?.message
@@ -46,7 +47,7 @@ export function createOwnerReader(ctx) {
         if(!Array.isArray(page?.records)||typeof page.hasMore!=='boolean')throw new DatabaseError('HISTORY_INVALID','Session history is unavailable',503)
         records.push(...page.records)
       }
-      return projectSession({...snapshot,records})
+      const view=projectSession({...snapshot,records});return withSessionLineage(ctx,view,signal)
     }catch(error){
       if(combined.aborted)combined.throwIfAborted()
       if(error instanceof DatabaseError)throw error

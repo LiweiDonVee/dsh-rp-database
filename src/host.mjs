@@ -13,6 +13,7 @@ import {factCapture} from './fact-review.mjs'
 import {extractText} from './documents.mjs'
 import {createVectorIndex} from './index-store.mjs'
 import {restoreEnvelope,restoreTransport,sessionIds,validateCanonicalState} from './state-transfer.mjs'
+import {withSessionLineage} from './lineage.mjs'
 
 export const name='rp-database'
 export const inject=['connection','typertGateway','agents','tools','systemPrompt']
@@ -47,7 +48,7 @@ export async function createDatabaseHost(ctx,options={}){
   }
   async function scope(input,signal){
     if(input.agent&&input.agent.session.id!==input.sessionId)throw new DatabaseError('AGENT_MISMATCH','The caller does not own this story',403)
-    return input.agent?liveView(input.agent):readOwner(input.sessionId,signal)
+    return input.agent?withSessionLineage(ctx,liveView(input.agent),signal):readOwner(input.sessionId,signal)
   }
   async function ensure(view){
     if(bindings.has(view.sessionId))return
@@ -92,7 +93,7 @@ export async function createDatabaseHost(ctx,options={}){
   }
   const service={
     apiVersion:2,
-    capabilities:Object.freeze({factReview:1}),
+    capabilities:Object.freeze({factReview:1,sessionLineage:1}),
     contentRevision:(input={})=>run(input.signal,()=>store.contentRevision()),
     exportContent:input=>run(input.signal,()=>{owner(input);return store.exportContent(input)}),
     importContent:input=>run(input.signal,async()=>{owner(input);const result=await store.importContent(input);await sync();changed();return result}),
@@ -117,11 +118,11 @@ export async function createDatabaseHost(ctx,options={}){
       if(!preflight.supported)throw new DatabaseError(preflight.conflicts[0]?.code??'RESTORE_PAYLOAD_INVALID','Database restore preflight failed',409)
       if((await store.contentRevision()).revision!==input.expectedRevision)throw new DatabaseError('REVISION_CONFLICT','Database state changed; reload before restoring',409)
       const views=new Map()
-      for(const id of ids){try{views.set(id,await readOwner(id,signal))}catch(error){if(error.code==='FORBIDDEN')throw error;throw new DatabaseError('RESTORE_REQUIREMENT_MISSING','Import and cold-validate the exact destination canonical Sessions before Database restore',409)}}
+      for(const id of ids){try{views.set(id,await withSessionLineage(ctx,await readOwner(id,signal),signal,input.lineages))}catch(error){if(['FORBIDDEN','INVALID_ANCESTRY'].includes(error.code))throw error;throw new DatabaseError('RESTORE_REQUIREMENT_MISSING','Import and cold-validate the exact destination canonical Sessions before Database restore',409)}}
       const result=await store.restoreState(request,views);await sync();changed();return result
     }),
     hasBinding:id=>!stopped&&bindings.has(id),
-    ensureAgent:agent=>run(undefined,async()=>ensure(liveView(agent))),
+    ensureAgent:agent=>run(undefined,async signal=>ensure(await withSessionLineage(ctx,liveView(agent),signal))),
     async state(input={}){return run(input.signal,async signal=>{
       let binding=null
       if(input.sessionId){const view=await scope(input,signal);await ensure(view);if(bindings.has(view.sessionId)){

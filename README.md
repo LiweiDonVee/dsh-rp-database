@@ -8,17 +8,17 @@
 
 ## 安装
 
-0.3.1 要求官方 DSH 0.2.1-rc.3 或后续受支持的 0.2.x，Node24。旧 0.1.1 在 rc.2 的历史验收仍保留；新版本不宣称已验过 rc.2。使用构建或正式 Release 的 `dsh-rp-database-0.3.1.tgz`，完全退出 DSH 后执行，再重启：
+0.3.2 要求官方 DSH 0.2.2-rc.1 或后续受支持的 0.2.x，Node24。旧 0.1.1 在 rc.2 的历史验收仍保留；新版本不宣称已验过 rc.2。使用构建或正式 Release 的 `dsh-rp-database-0.3.2.tgz`，完全退出 DSH 后执行，再重启：
 
 ```powershell
-dsh plugin --profile desktop add ./dsh-rp-database-0.3.1.tgz
+dsh plugin --profile desktop add ./dsh-rp-database-0.3.2.tgz
 ```
 
 Web 模式将 desktop 改为 web。安装 RP Studio 1.5.0 时从 **RP ▾ → 数据库** 打开；单独安装时点击会话顶部 **数据库**，也可从右侧新增页签进入 **故事数据库**。Windows 找不到 dsh 时可使用默认官方启动器：
 
 ```powershell
 $dshCli = Join-Path $env:LOCALAPPDATA 'Programs/DeepSeek Harness/resources/runtime/cli/bin/dsh.cmd'
-& $dshCli plugin --profile desktop add ./dsh-rp-database-0.3.1.tgz
+& $dshCli plugin --profile desktop add ./dsh-rp-database-0.3.2.tgz
 ```
 
 ## 使用
@@ -93,3 +93,12 @@ pnpm package
 产物与 SHA256SUMS 在 artifacts。`pnpm smoke` 单独安装本包到隔离 home 验证原生事实/来源/界面回归；`pnpm smoke:documents` 使用两个独立临时 home 验证真实 PDF、HTTP 增量计数、公共 Session persistence 的冷恢复和索引进程重启。测试使用确定性本地模型与合成资料，不代表 GM/Context/Last Step 完整组合或真实推理质量。MIT 许可证；包内 pdf2json 4.1.0 为 Apache-2.0，通知与许可证在 third-party。
 
 [架构说明](docs/architecture.md) · [验收记录](docs/acceptance.md) · [更新记录](CHANGELOG.md)
+
+
+## DSH 0.2.2 compatibility
+
+This release requires DSH `>=0.2.2-rc.1 <0.3.0-0`; the exact integration target is Desktop `0.2.2-rc.1`. Future versions in that range have not been individually accepted. Install Database/Context `0.3.2`, LastStep `0.4.2`, and GM/StoryKit `0.2.2` together when using story forks or saved-story restoration.
+
+DSH 0.2.2 ordinary forks preserve a verified event prefix without adding a parent to the canonical Session header. The host-only `rpGM.sessionLineage({sessionId, signal})` returns `{sessionId, parentSessionId: string | null, inheritedEventCount}` from GM's existing durable binding and actual Session observations. RP owners derive ancestry from this result; canonical headers and event logs retain their original bytes. Conflicting legacy header parents or changed prefixes are rejected.
+
+Saved-story format remains schema 1. StoryKit derives the host-only restore argument `lineages: [{sessionId, parentSessionId: string | null}]` from existing `pluginState.gm.payload.bindings`, with one row per destination and `null` for roots. Database, Context, and LastStep verify the actual destination Session prefixes before using this mapping. It is not a model tool or a public owner route.
