@@ -46,9 +46,10 @@ export async function createDatabaseHost(ctx,options={}){
     if(typeof agent.session.snapshotEvents!=='function')throw new DatabaseError('SESSION_UNAVAILABLE','Canonical session history is unavailable',503)
     return projectSession({header:agent.session.header??{id:agent.session.id},records:agent.session.snapshotEvents()})
   }
-  async function scope(input,signal){
+  async function scope(input,signal,lineages){
+    if(lineages!==undefined&&input.agent)throw new DatabaseError('OWNER_REQUIRED','Explicit lineage is available only to owner reads',403)
     if(input.agent&&input.agent.session.id!==input.sessionId)throw new DatabaseError('AGENT_MISMATCH','The caller does not own this story',403)
-    return input.agent?withSessionLineage(ctx,liveView(input.agent),signal):readOwner(input.sessionId,signal)
+    return input.agent?withSessionLineage(ctx,liveView(input.agent),signal):readOwner(input.sessionId,signal,lineages)
   }
   async function ensure(view){
     if(bindings.has(view.sessionId))return
@@ -70,8 +71,8 @@ export async function createDatabaseHost(ctx,options={}){
     if(!bindings.has(view.sessionId))throw new DatabaseError('NOT_BOUND','Bind a database to this story first',409)
     return{view,value:await store.session(view.sessionId,{activeAnchors:view.activeAnchors,view,...view.currentAnchor?{currentAnchor:view.currentAnchor}:{}})}
   }
-  async function currentV2(input,signal){
-    const view=await scope(input,signal);await ensure(view)
+  async function currentV2(input,signal,lineages){
+    const view=await scope(input,signal,lineages);await ensure(view)
     if(!bindings.has(view.sessionId))throw new DatabaseError('NOT_BOUND','Bind sources to this story first',409)
     return{view,value:await store.sessionV2(view.sessionId,{activeAnchors:view.activeAnchors,view,...view.currentAnchor?{currentAnchor:view.currentAnchor}:{}})}
   }
@@ -142,7 +143,7 @@ export async function createDatabaseHost(ctx,options={}){
     save:input=>run(input.signal,async()=>{const result=await store.saveDatabase(input.database,{expectedRevision:input.expectedRevision});await sync();changed();return result}),
     bind:input=>run(input.signal,async signal=>{owner(input);await scope(input,signal);const result=await store.bindSession(input.sessionId,input);await sync();changed(input.sessionId);return result}),
     bindSources:input=>run(input.signal,async signal=>{owner(input);await scope(input,signal);const result=await store.bindSources(input.sessionId,input);await sync();changed(input.sessionId);return result}),
-    effectiveV2:input=>run(input.signal,async signal=>{const{value}=await currentV2(input,signal);return input.agent?enabled(value):value}),
+    effectiveV2:input=>run(input.signal,async signal=>{const{value}=await currentV2(input,signal,input.lineages);return input.agent?enabled(value):value}),
     catalogV2:input=>run(input.signal,async signal=>{const{value}=await currentV2(input,signal);return{revision:value.revision,binding:value.binding,entries:value.entries.filter(entry=>entry.mode!=='disabled').map(metaV2),notes:enabled(value).notes}}),
     readV2:input=>run(input.signal,async signal=>{
       if(!Array.isArray(input.refs))throw new DatabaseError('INVALID_REFERENCE','refs must be an array')
@@ -153,7 +154,7 @@ export async function createDatabaseHost(ctx,options={}){
     searchV2:input=>run(input.signal,signal=>qualifiedSearch(input,signal)),
     patchV2:input=>run(input.signal,signal=>genericCommit(input,signal)),
     initializeStoryState:input=>run(input.signal,async signal=>{owner(input);await scope(input,signal);const result=await store.initializeStoryState(input.sessionId,input);await sync();changed(input.sessionId);return result}),
-    factReviewState:input=>run(input.signal,async signal=>{const{view}=await currentV2(input,signal);return store.factReviewState(input.sessionId,{activeAnchors:view.activeAnchors,currentAnchor:view.currentAnchor,view})}),
+    factReviewState:input=>run(input.signal,async signal=>{const{view}=await currentV2(input,signal,input.lineages);return store.factReviewState(input.sessionId,{activeAnchors:view.activeAnchors,currentAnchor:view.currentAnchor,view})}),
     factReviewProjection:input=>run(input.signal,async signal=>(await service.factReviewState({...input,signal})).projection),
     stageFactCandidate:input=>run(input.signal,async signal=>{owner(input);const{view}=await currentV2(input,signal),result=await store.stageFactCandidate(input,{activeAnchors:view.activeAnchors,currentAnchor:view.currentAnchor,view});changed(input.sessionId);return result}),
     recordFactDecision:input=>run(input.signal,async signal=>{owner(input);const view=await scope(input,signal);await ensure(view);const result=await store.recordFactDecision(input,{activeAnchors:view.activeAnchors,currentAnchor:view.currentAnchor,view});changed(input.sessionId);return result}),

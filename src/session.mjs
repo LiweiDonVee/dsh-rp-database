@@ -27,7 +27,7 @@ export function projectSession(snapshot) {
 
 /** Read the complete canonical history under the authenticated owner peer. */
 export function createOwnerReader(ctx) {
-  return async function read(sessionId,signal){
+  return async function read(sessionId,signal,lineages){
     if(typeof sessionId!=='string'||!sessionId.trim())throw new DatabaseError('INVALID_SESSION','A session is required')
     signal?.throwIfAborted()
     const lifetime=new AbortController(),combined=signal?AbortSignal.any([signal,lifetime.signal]):lifetime.signal
@@ -47,7 +47,7 @@ export function createOwnerReader(ctx) {
         if(!Array.isArray(page?.records)||typeof page.hasMore!=='boolean')throw new DatabaseError('HISTORY_INVALID','Session history is unavailable',503)
         records.push(...page.records)
       }
-      const view=projectSession({...snapshot,records});return withSessionLineage(ctx,view,signal)
+      const view=projectSession({...snapshot,records});return withSessionLineage(ctx,view,signal,lineages)
     }catch(error){
       if(combined.aborted)combined.throwIfAborted()
       if(error instanceof DatabaseError)throw error
