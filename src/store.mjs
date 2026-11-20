@@ -237,7 +237,7 @@ export function createDatabaseStore({ directory }) {
       });
     },
     cacheRead(identity,dimension,hashes=[]) {
-      return read(state=>{const provider=state.vectorIndex?.schemaVersion===1?state.vectorIndex.providers?.[fingerprint(identity)]:undefined,d=dimension??provider?.dimension,rows=provider?.dimensions?.[d]??{};return{dimension:d,vectors:Object.fromEntries(hashes.filter(key=>rows[key]).map(key=>[key,rows[key]])),...provider?.lastErrorCode?{lastErrorCode:provider.lastErrorCode}:{}};});
+      return read(state=>{const provider=state.vectorIndex?.schemaVersion===1?state.vectorIndex.providers?.[fingerprint(identity)]:undefined,d=dimension??provider?.dimension,rows=provider?.dimensions?.[d]??{};return{dimension:d,activeDimension:provider?.dimension,vectors:Object.fromEntries(hashes.filter(key=>rows[key]).map(key=>[key,rows[key]])),...provider?.lastErrorCode?{lastErrorCode:provider.lastErrorCode}:{}};});
     },
     cacheWrite(identity,dimension,rows,errorCode) {
       return serial(async()=>{

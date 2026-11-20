@@ -56,6 +56,83 @@ test('embedding and rerank actually receive enabled documents and the abort sign
   assert.deepEqual(result.required, ['must']);
 });
 
+test('both provider I/Os start once before either completes and fusion is independent of completion order', async () => {
+  const { createRetriever, retrievalDocument } = await import('../src/retrieval.mjs');
+  const vectors = [[1, 0], [0, 1], [1, 0], [0, 0.5]], ranks = [{ index: 2, score: 0.8 }, { index: 1, score: 0.8 }];
+  const documents = entries.slice(0, 3).map(entry => retrievalDocument({ keywords: [], tags: [], notes: '', ...entry }));
+  const expected = {
+    candidates: [
+      { id: 'hero', score: 1 / 61, reasons: ['embedding', 'rerank'] },
+      { id: 'must', score: 1 / 62, reasons: ['embedding', 'rerank'] },
+      { id: 'moon-city', score: 1 / 63, reasons: ['title', 'lexical', 'embedding'] },
+    ], required: ['must'], degraded: [],
+  };
+  for (const indexed of [false, true]) for (const rerankFirst of [false, true]) {
+    const embedding = Promise.withResolvers(), reranking = Promise.withResolvers(), calls = [], signal = new AbortController().signal;
+    const receiveEmbedding = (texts, receivedSignal) => {
+      calls.push('embedding'); assert.deepEqual(texts, ['月城', ...documents]); assert.equal(receivedSignal, signal); return embedding.promise;
+    };
+    const retriever = createRetriever({
+      ...(indexed ? { embedEntries: input => { assert.deepEqual(input.entries.map(entry => entry.id), ['moon-city', 'hero', 'must']); return receiveEmbedding([input.query, ...input.documents], input.signal); }, embed: () => assert.fail('indexed lookup must not also call embed') } : { embed: receiveEmbedding }),
+      rerank: input => { calls.push('reranking'); assert.equal(input.query, '月城'); assert.deepEqual(input.documents, documents); assert.equal(input.signal, signal); return reranking.promise; },
+    });
+    const pending = retriever.search({ entries, query: '月城', signal });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(calls, ['embedding', 'reranking']);
+    if (rerankFirst) { reranking.resolve(ranks); await new Promise(resolve => setImmediate(resolve)); embedding.resolve(vectors); }
+    else { embedding.resolve(vectors); await new Promise(resolve => setImmediate(resolve)); reranking.resolve(ranks); }
+    assert.deepEqual(await pending, expected);
+    assert.equal(calls.length, 2);
+  }
+});
+
+test('parallel provider failures retain deterministic degradation and the surviving provider result', async () => {
+  const { createRetriever } = await import('../src/retrieval.mjs');
+  const vectors = [[1, 0], [0, 1], [1, 0], [0, 0.5]], ranks = [{ index: 1, score: 0.9 }];
+  for (const embeddingFails of [false, true]) for (const rerankFails of [false, true]) {
+    const embedding = Promise.withResolvers(); let rerankCalls = 0;
+    const pending = createRetriever({ embed: () => embedding.promise, rerank: () => { rerankCalls++; if (rerankFails) throw new Error('private rerank failure'); return ranks; } }).search({ entries, query: '月城' });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(rerankCalls, 1);
+    if (embeddingFails) embedding.reject(new Error('private embedding failure')); else embedding.resolve(vectors);
+    const result = await pending;
+    assert.deepEqual(result.degraded, [...embeddingFails ? ['embedding_failed'] : [], ...rerankFails ? ['reranking_failed'] : []]);
+    assert.deepEqual(result.required, ['must']);
+    assert.equal(result.candidates[0].id, rerankFails ? 'moon-city' : 'hero');
+    assert.equal(result.candidates.some(item => item.reasons.includes('embedding')), !embeddingFails);
+    assert.equal(result.candidates.some(item => item.reasons.includes('rerank')), !rerankFails);
+    assert.ok(!JSON.stringify(result).includes('private'));
+  }
+});
+
+test('empty and disabled inputs start no requests while limit zero retains required IDs', async () => {
+  const { createRetriever } = await import('../src/retrieval.mjs');
+  let embeddingCalls = 0, rerankCalls = 0;
+  const retriever = createRetriever({ embed: async () => { embeddingCalls++; return [[1], [1], [1], [1]]; }, rerank: async () => { rerankCalls++; return []; } });
+  for (const input of [[], [entries[3]]]) assert.deepEqual(await retriever.search({ entries: input, query: '月城' }), { candidates: [], required: [], degraded: [] });
+  assert.equal(embeddingCalls, 0); assert.equal(rerankCalls, 0);
+  assert.deepEqual(await retriever.search({ entries, query: '月城', limit: 0 }), { candidates: [], required: ['must'], degraded: [] });
+  assert.equal(embeddingCalls, 1); assert.equal(rerankCalls, 1);
+});
+
+test('cancellation reaches both original requests and observes a late sibling rejection', async t => {
+  const { createRetriever } = await import('../src/retrieval.mjs');
+  const controller = new AbortController(), embedding = Promise.withResolvers(), reranking = Promise.withResolvers(), signals = [], unhandled = [];
+  const onUnhandled = error => unhandled.push(error);
+  process.on('unhandledRejection', onUnhandled); t.after(() => process.off('unhandledRejection', onUnhandled));
+  const pending = createRetriever({ embed: (_texts, signal) => { signals.push(signal); return embedding.promise; }, rerank: ({ signal }) => { signals.push(signal); return reranking.promise; } }).search({ entries, query: '月城', signal: controller.signal });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(signals, [controller.signal, controller.signal]);
+  const rejected = assert.rejects(pending, { name: 'AbortError', message: 'Retrieval aborted' });
+  controller.abort(); embedding.reject(new DOMException('provider cancellation', 'AbortError')); await rejected;
+  reranking.reject(new Error('late private provider failure'));
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(unhandled, []);
+  let calls = 0;
+  await assert.rejects(createRetriever({ embed: () => { calls++; }, rerank: () => { calls++; } }).search({ entries, query: '月城', signal: controller.signal }), { name: 'AbortError' });
+  assert.equal(calls, 0);
+});
+
 test('rerank-only retrieval considers enabled documents outside lexical matches', async () => {
   const { createRetriever } = await import('../src/retrieval.mjs');
   const result = await createRetriever({ rerank: async ({ documents }) => [{ index: documents.findIndex(text => text.includes('南方港口')), score: 0.8 }] }).search({ entries, query: 'seafarer', limit: 1 });

@@ -71,9 +71,13 @@ export async function createDatabaseHost(ctx,options={}){
     if(!bindings.has(view.sessionId))throw new DatabaseError('NOT_BOUND','Bind a database to this story first',409)
     return{view,value:await store.session(view.sessionId,{activeAnchors:view.activeAnchors,view,...view.currentAnchor?{currentAnchor:view.currentAnchor}:{}})}
   }
-  async function currentV2(input,signal,lineages){
+  async function boundView(input,signal,lineages){
     const view=await scope(input,signal,lineages);await ensure(view)
     if(!bindings.has(view.sessionId))throw new DatabaseError('NOT_BOUND','Bind sources to this story first',409)
+    return view
+  }
+  async function currentV2(input,signal,lineages){
+    const view=await boundView(input,signal,lineages)
     return{view,value:await store.sessionV2(view.sessionId,{activeAnchors:view.activeAnchors,view,...view.currentAnchor?{currentAnchor:view.currentAnchor}:{}})}
   }
   async function qualifiedSearch(input,signal){
@@ -88,7 +92,7 @@ export async function createDatabaseHost(ctx,options={}){
     changed(input.sessionId);return input.agent?{...result,session:enabled(result.session),entries:result.entries.filter(entry=>entry.mode!=='disabled')}:result
   }
   async function receiptFor(input,selector,signal){
-    const{view}=await currentV2(input,signal),receipt=await store.receipt(input.sessionId,selector,{activeAnchors:view.activeAnchors,view})
+    const view=await boundView(input,signal),receipt=await store.receipt(input.sessionId,selector,{activeAnchors:view.activeAnchors,view})
     if(receipt)activeFactSource(view,receipt.source,receipt.factRoundId?'review':receipt.kind)
     return receipt
   }

@@ -13,18 +13,19 @@ export function createVectorIndex({store,embed,config,onChange=()=>{}}){
     signal?.throwIfAborted()
     const unique=new Map(texts.map((text,index)=>[cacheHash(text,provenance[index]),text])),hashes=[...unique.keys()],cached=await store.cacheRead(identity,requiredDimension,hashes)
     let dimension=requiredDimension??cached.dimension
+    const added=[]
     const values=new Map(hashes.filter(hash=>valid(cached.vectors[hash],dimension)).map(hash=>[hash,cached.vectors[hash]]))
     const missing=hashes.filter(hash=>!values.has(hash));let indexed=0
     if(missing.length){
       const vectors=validateVectors(await embed(missing.map(hash=>unique.get(hash)),signal),missing.length),actual=vectors[0].length
       if(requiredDimension!==undefined&&actual!==requiredDimension)throw Error('Embedding dimensions changed inside one request')
       if(dimension!==actual){dimension=actual;values.clear()}
-      missing.forEach((hash,index)=>values.set(hash,vectors[index]));indexed+=missing.length
+      missing.forEach((hash,index)=>{values.set(hash,vectors[index]);added.push({hash,vector:vectors[index]})});indexed+=missing.length
       const other=hashes.filter(hash=>!values.has(hash))
-      if(other.length){const more=validateVectors(await embed(other.map(hash=>unique.get(hash)),signal),other.length);if(more[0].length!==dimension)throw Error('Inconsistent embedding dimensions');other.forEach((hash,index)=>values.set(hash,more[index]));indexed+=other.length}
+      if(other.length){const more=validateVectors(await embed(other.map(hash=>unique.get(hash)),signal),other.length);if(more[0].length!==dimension)throw Error('Inconsistent embedding dimensions');other.forEach((hash,index)=>{values.set(hash,more[index]);added.push({hash,vector:more[index]})});indexed+=other.length}
     }
     signal?.throwIfAborted()
-    if(dimension!==undefined){await store.cacheWrite(identity,dimension,[...values].map(([hash,vector])=>({hash,vector})));onChange()}
+    if(dimension!==undefined&&(added.length||cached.activeDimension!==dimension||cached.lastErrorCode)){await store.cacheWrite(identity,dimension,added);onChange()}
     return{vectors:texts.map((text,index)=>values.get(cacheHash(text,provenance[index]))),indexedChunks:indexed,skippedChunks:texts.length-indexed}
   }
   return{

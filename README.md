@@ -8,17 +8,17 @@
 
 ## 安装
 
-0.3.2 要求官方 DSH 0.2.2-rc.1 或后续受支持的 0.2.x，Node24。旧 0.1.1 在 rc.2 的历史验收仍保留；新版本不宣称已验过 rc.2。使用构建或正式 Release 的 `dsh-rp-database-0.3.2.tgz`，完全退出 DSH 后执行，再重启：
+0.3.3 要求官方 DSH 0.2.2-rc.1 或后续受支持的 0.2.x，Node24。旧 0.1.1 在 rc.2 的历史验收仍保留；新版本不宣称已验过 rc.2。使用构建或正式 Release 的 `dsh-rp-database-0.3.3.tgz`，完全退出 DSH 后执行，再重启：
 
 ```powershell
-dsh plugin --profile desktop add ./dsh-rp-database-0.3.2.tgz
+dsh plugin --profile desktop add ./dsh-rp-database-0.3.3.tgz
 ```
 
 Web 模式将 desktop 改为 web。安装 RP Studio 1.5.0 时从 **RP ▾ → 数据库** 打开；单独安装时点击会话顶部 **数据库**，也可从右侧新增页签进入 **故事数据库**。Windows 找不到 dsh 时可使用默认官方启动器：
 
 ```powershell
 $dshCli = Join-Path $env:LOCALAPPDATA 'Programs/DeepSeek Harness/resources/runtime/cli/bin/dsh.cmd'
-& $dshCli plugin --profile desktop add ./dsh-rp-database-0.3.2.tgz
+& $dshCli plugin --profile desktop add ./dsh-rp-database-0.3.3.tgz
 ```
 
 ## 使用

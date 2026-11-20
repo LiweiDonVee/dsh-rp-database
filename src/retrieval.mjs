@@ -69,6 +69,12 @@ export function createRetriever({ embed, rerank, embedEntries } = {}) {
       const lexicalRanks = enabled.map((entry, index) => ({ id: entry.id, index, ...lexical(entry, queryText, queryTokens) })).filter(item => item.score > 0).sort((a, b) => b.score - a.score || a.index - b.index);
       const scores = new Map(lexicalRanks.map(item => [item.id, item]));
       const documents = enabled.map(retrievalDocument);
+      // Rerank uses the original documents, so its I/O can overlap embedding.
+      // Observe rejection now even if embedding cancellation returns early.
+      const rerankResult = rerank && enabled.length ? Promise.resolve().then(() => {
+        checkAbort(signal);
+        return rerank({ query, documents, signal });
+      }).then(value => ({ value }), cause => ({ failed: true, cause })) : null;
       if ((embed||embedEntries) && enabled.length) {
         try {
           const values=embedEntries?await embedEntries({query,documents,entries:enabled,signal}):await embed([query,...documents],signal)
@@ -91,7 +97,9 @@ export function createRetriever({ embed, rerank, embedEntries } = {}) {
       let ranked = [...scores.values()].sort((a, b) => b.score - a.score || a.index - b.index);
       if (rerank && enabled.length) {
         try {
-          const ranks = validateRanks(await rerank({ query, documents, signal }), enabled.length);
+          const result = await rerankResult;
+          if (result.failed) throw result.cause;
+          const ranks = validateRanks(result.value, enabled.length);
           checkAbort(signal);
           const reranked = ranks.map(rank => {
             const entry = enabled[rank.index];
